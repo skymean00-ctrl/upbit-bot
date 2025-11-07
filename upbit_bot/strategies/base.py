@@ -24,7 +24,7 @@ class StrategySignal(str, Enum):
     SELL = "sell"
 
 
-class Strategy(Protocol):
+class BaseStrategy(Protocol):
     """Callable protocol used by the execution engine."""
 
     name: str

@@ -18,7 +18,13 @@ class RSITrendFilterStrategy(BaseStrategy):
     """
 
     rsi_window: int = Field(14, description="RSI 계산에 사용할 기간 (window)")
-    ma_window: int = Field(50, description="이동평균선 계산에 사용할 기간 (window)")
+    ma_window: int = Field(50, description="이동평균선 계산에 사용할 기간 (window)"ption="이동평균선 계산에 사용할 기간 (window)")
+    bb_window: int = Field(20, description="볼린저 밴드 계산에 사용할 기간 (window)")
+    bb_num_std_dev: float = Field(2.0, description="볼린저 밴드 표준편차 배수")
+    bb_window: int = Field(20, description="볼린저 밴드 계산에 사용할 기간 (window)")
+    bb_num_std_dev: float = Field(2.0, description="볼린저 밴드 표준편차 배수")ption="이동평균선 계산에 사용할 기간 (window)")ption="이동평균선 계산에 사용할 기간 (window)")ption="이동평균선 계산에 사용할 기간 (window)")
+    bb_window: int = Field(20, description="볼린저 밴드 계산에 사용할 기간 (window)")
+    bb_num_std_dev: float = Field(2.0, description="볼린저 밴드 표준편차 배수")ption="이동평균선 계산에 사용할 기간 (window)")
     rsi_oversold: int = Field(30, description="RSI 과매도 기준")
     rsi_overbought: int = Field(70, description="RSI 과매수 기준")
 

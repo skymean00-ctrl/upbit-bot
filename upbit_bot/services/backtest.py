@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from upbit_bot.strategies import Candle, Strategy, StrategySignal
+from upbit_bot.strategies import Candle, BaseStrategy, StrategySignal
 
 
 @dataclass

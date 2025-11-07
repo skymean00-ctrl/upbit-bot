@@ -24,9 +24,13 @@ upbit_bot/services/execution.py
 upbit_bot/services/risk.py
 upbit_bot/strategies/__init__.py
 upbit_bot/strategies/base.py
+upbit_bot/strategies/combined_strategy.py
 upbit_bot/strategies/factory.py
 upbit_bot/strategies/ma_crossover.py
+upbit_bot/strategies/mixed_bb_rsi_ma.py
 upbit_bot/strategies/portfolio.py
+upbit_bot/strategies/rsi_trend_filter.py
+upbit_bot/strategies/volatility_breakout.py
 upbit_bot/utils/__init__.py
 upbit_bot/utils/logging.py
 upbit_bot/utils/notifications.py

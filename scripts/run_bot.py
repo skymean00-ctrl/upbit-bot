@@ -6,13 +6,176 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 
 from upbit_bot.config import load_settings
 from upbit_bot.core import UpbitClient
 from upbit_bot.services import ExecutionEngine
 from upbit_bot.services.risk import PositionSizer, RiskConfig, RiskManager
-from upbit_bot.strategies import get_strategy
-from upbit_bot.utils import ConsoleNotifier, SlackNotifier, TelegramNotifier, configure_logging
+from upbit_bot.strategies import CombinedStrategy, MovingAverageCrossoverStrategy, MixedBBRSIMAStrategy, RSITrendFilterStrategy, VolatilityBreakoutStrategy
+from upbit_bot.utils import ConsoleNoti
+
+logger = logging.getLogger(__name__)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the Upbit trading bot.")
+    parser.add_argument("--verbose", "-v", action="count", default=0, help="Increase verbosity (e.g., -v, -vv)")
+    return parser.parse_args()
+
+def setup_logging(verbose_level: int):
+    level = logging.INFO
+    if verbose_level == 1:
+        level = logging.DEBUG
+    elif verbose_level >= 2:
+        level = logging.DEBUG # Or more detailed if needed
+
+    logging.basicConfig(level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+def main():
+    args = parse_args()
+    setup_logging(args.verbose)
+
+    logger.info("Upbit 봇 시작...")
+
+    settings = load_settings()
+
+    # === 전략 로딩 부분 시작 ===
+    sub_strategies_configs = settings.get("combined_strategies", [])
+    if not sub_strategies_configs:
+        # 기존 단일 전략 로직 (호환성을 위해 유지)
+        strategy_name = settings.strategy.name
+        strategy_params = settings.strategy.config
+        
+        if strategy_name == "ma_crossover":
+            strategy = MovingAverageCrossoverStrategy(**strategy_params)
+        elif strategy_name == "mixed_bb_rsi_ma":
+            strategy = MixedBBRSIMAStrategy(**strategy_params)
+        elif strategy_name == "rsi_trend_filter":
+            strategy = RSITrendFilterStrategy(**strategy_params)
+        elif strategy_name == "volatility_breakout":
+            strategy = VolatilityBreakoutStrategy(**strategy_params)
+        else:
+            logger.error(f"알 수 없는 단일 전략: {strategy_name}")
+            return
+        logger.info(f"단일 전략 '{strategy.name}' 사용.")
+    else:
+        sub_strategies = []
+        for strat_config in sub_strategies_configs:
+            strategy_name = strat_config.get("name")
+            strategy_params = strat_config.get("config", {})
+            
+            if strategy_name == "ma_crossover":
+                sub_strategies.append(MovingAverageCrossoverStrategy(**strategy_params))
+            elif strategy_name == "mixed_bb_rsi_ma":
+                sub_strategies.append(MixedBBRSIMAStrategy(**strategy_params))
+            elif strategy_name == "rsi_trend_filter":
+                sub_strategies.append(RSITrendFilterStrategy(**strategy_params))
+            elif strategy_name == "volatility_breakout":
+                sub_strategies.append(VolatilityBreakoutStrategy(**strategy_params))
+            else:
+                logger.warning(f"알 수 없는 하위 전략: {strategy_name}. 이 전략은 무시됩니다.")
+        
+        if not sub_strategies:
+            logger.error("CombinedStrategy에 추가할 유효한 하위 전략이 없습니다. 봇을 종료합니다.")
+            return
+        
+        strategy = CombinedStrategy(sub_strategies=sub_strategies)
+        logger.info(f"복합 전략 '{strategy.name}' 사용. 하위 전략: {[s.name for s in sub_strategies]}")
+    # === 전략 로딩 부분 끝 ===
+
+    client = UpbitClient(settings.upbit_api_key, settings.upbit_secret_key)
+    risk_config = RiskConfig(**settings.risk)
+    risk_manager = RiskManager(risk_config, PositionSizer(client))
+    
+    # ExecutionEngine에 ConsoleNoti를 전달하여 알림을 받을 수 있도록 합니다.
+    notifier = ConsoleNoti()
+    engine = ExecutionEngine(client, strategy, risk_manager, notifier)
+
+    try:
+        engine.run()
+    except KeyboardInterrupt:
+        logger.info("봇이 사용자 요청으로 종료됩니다.")
+    except Exception as e:
+        logger.exception(f"봇 실행 중 예상치 못한 오류 발생: {e}")
+    finally:
+        logger.info("Upbit 봇 종료.")
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3
+"""Run the Upbit trading bot in live mode."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+
+from upbit_bot.config import load_settings
+from upbit_bot.core import UpbitClient
+from upbit_bot.services import ExecutionEngine
+from upbit_bot.services.risk import PositionSizer, RiskConfig, RiskManager
+from upbit_bot.strategies import get_strategy, CombinedStrategy, MovingAverageCrossoverStrategy, MixedBBRSIMAStrategy, RSITrendFilterStrategy, VolatilityBreakoutStrategy
+from upbit_bot.utils import ConsoleNoti
+
+
+def main():
+    args = parse_args()
+    setup_logging(args.verbose)
+
+    logger.info("Upbit 봇 시작...")
+
+    settings = load_settings()
+    # === 전략 로딩 부분 시작 ===
+    sub_strategies_configs = settings.get("combined_strategies", [])
+    if not sub_strategies_configs:
+        # 기존 단일 전략 로직 (호환성을 위해 유지)
+        # get_strategy 함수는 이제 사용되지 않으므로, 각 전략 클래스를 직접 호출하도록 변경
+        strategy_name = settings.strategy.name
+        strategy_params = settings.strategy.config
+        
+        if strategy_name == "ma_crossover":
+            strategy = MovingAverageCrossoverStrategy(**strategy_params)
+        elif strategy_name == "mixed_bb_rsi_ma":
+            strategy = MixedBBRSIMAStrategy(**strategy_params)
+        elif strategy_name == "rsi_trend_filter":
+            strategy = RSITrendFilterStrategy(**strategy_params)
+        elif strategy_name == "volatility_breakout":
+            strategy = VolatilityBreakoutStrategy(**strategy_params)
+        else:
+            logger.error(f"알 수 없는 단일 전략: {strategy_name}")
+            return
+        logger.info(f"단일 전략 '{strategy.name}' 사용.")
+    else:
+        sub_strategies = []
+        for strat_config in sub_strategies_configs:
+            strategy_name = strat_config.get("name")
+            strategy_params = strat_config.get("config", {})
+            
+            if strategy_name == "ma_crossover":
+                sub_strategies.append(MovingAverageCrossoverStrategy(**strategy_params))
+            elif strategy_name == "mixed_bb_rsi_ma":
+                sub_strategies.append(MixedBBRSIMAStrategy(**strategy_params))
+            elif strategy_name == "rsi_trend_filter":
+                sub_strategies.append(RSITrendFilterStrategy(**strategy_params))
+            elif strategy_name == "volatility_breakout":
+                sub_strategies.append(VolatilityBreakoutStrategy(**strategy_params))
+            else:
+                logger.warning(f"알 수 없는 하위 전략: {strategy_name}. 이 전략은 무시됩니다.")
+        
+        if not sub_strategies:
+            logger.error("CombinedStrategy에 추가할 유효한 하위 전략이 없습니다. 봇을 종료합니다.")
+            return
+        
+        strategy = CombinedStrategy(sub_strategies=sub_strategies)
+        logger.info(f"복합 전략 '{strategy.name}' 사용. 하위 전략: {[s.name for s in sub_strategies]}")
+    # === 전략 로딩 부분 끝 ===
+
+    # 나머지 main 함수 로직 (기존 코드를 여기에 삽입해야 함)
+    # 예시: client = UpbitClient(settings.upbit_api_key, settings.upbit_secret_key)
+    #       risk_manager = RiskManager(RiskConfig(**settings.risk), PositionSizer(client))
+    #       engine = ExecutionEngine(client, strategy, risk_manager, ConsoleNoti())
+    #       engine.run()fier, SlackNotifier, TelegramNotifier, configure_logging
 
 
 def parse_args() -> argparse.Namespace:
