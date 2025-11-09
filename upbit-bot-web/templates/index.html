@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upbit Bot 상태</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        p { font-size: 1.1em; }
+        .status { font-weight: bold; color: green; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Upbit 자동 매매 봇 상태</h1>
+        <p>봇 상태: <span class="status">{{ bot_status }}</span></p>
+        <p>현재 잔고: <span class="status">{{ current_balance }}</span></p>
+        <p>더 많은 정보는 여기에 추가될 수 있습니다.</p>
+    </div>
+</body>
+</html>
+
