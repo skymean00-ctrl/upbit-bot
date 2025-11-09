@@ -1,34 +1,50 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 import pandas as pd
-from pydantic import Field
 
-from upbit_bot.strategies.base import BaseStrategy, StrategySignal
-
-if TYPE_CHECKING:
-    from upbit_bot.strategies import Candle
+from upbit_bot.strategies.base import Candle, Strategy, StrategySignal
 
 
-class RSITrendFilterStrategy(BaseStrategy):
+class RSITrendFilterStrategy(Strategy):
     """
     RSI와 이동평균선을 결합한 매매 전략.
     RSI 과매수/과매도 신호를 이동평균선 추세로 필터링합니다.
     """
 
-    name: str = "rsi_trend_filter"
-    rsi_window: int = Field(14, description="RSI 계산에 사용할 기간")
-    ma_window: int = Field(50, description="이동평균선 계산에 사용할 기간")
-    rsi_oversold: int = Field(30, description="RSI 과매도 기준")
-    rsi_overbought: int = Field(70, description="RSI 과매수 기준")
+    name = "rsi_trend_filter"
 
-    def get_signal(self, candles: list[Candle]) -> StrategySignal | None:
-        if len(candles) < max(self.ma_window, self.rsi_window):
-            return None  # 충분한 데이터가 없으면 신호 없음
+    def __init__(
+        self,
+        rsi_window: int = 14,
+        ma_window: int = 50,
+        rsi_oversold: int = 30,
+        rsi_overbought: int = 70,
+    ) -> None:
+        self.rsi_window = rsi_window
+        self.ma_window = ma_window
+        self.rsi_oversold = rsi_oversold
+        self.rsi_overbought = rsi_overbought
 
-        df = pd.DataFrame([c.model_dump() for c in candles])
-        df["close"] = pd.to_numeric(df["trade_price"])
+    def on_candles(self, candles: Iterable[Candle]) -> StrategySignal:
+        buffer = list(candles)
+        if len(buffer) < max(self.ma_window, self.rsi_window):
+            return StrategySignal.HOLD  # 충분한 데이터가 없으면 신호 없음
+
+        # Candle dataclass를 dict로 변환
+        data = [
+            {
+                "timestamp": c.timestamp,
+                "open": c.open,
+                "high": c.high,
+                "low": c.low,
+                "close": c.close,
+                "volume": c.volume,
+            }
+            for c in buffer
+        ]
+        df = pd.DataFrame(data)
 
         # RSI 계산
         delta = df["close"].diff()
@@ -72,5 +88,5 @@ class RSITrendFilterStrategy(BaseStrategy):
         ):
             return StrategySignal.SELL
 
-        return None  # 매매 신호 없음
+        return StrategySignal.HOLD  # 매매 신호 없음
 
