@@ -530,12 +530,17 @@ def _render_dashboard(
             0%, 100% {{ opacity: 1; }}
             50% {{ opacity: 0.5; }}
         }}
+        @keyframes shimmer {{
+            0% {{ background-position: -1000px 0; }}
+            100% {{ background-position: 1000px 0; }}
+        }}
         .status-indicator {{
             display: inline-block;
             width: 12px;
             height: 12px;
             border-radius: 50%;
             margin-right: 8px;
+            box-shadow: 0 0 8px currentColor;
         }}
         .status-indicator.running {{
             background-color: #10b981;
@@ -545,29 +550,86 @@ def _render_dashboard(
             background-color: #ef4444;
         }}
         .card {{
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid rgba(229, 231, 235, 0.5);
+        }}
+        .dark .card {{
+            border-color: rgba(55, 65, 81, 0.5);
         }}
         .card:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.15);
+        }}
+        .balance-card {{
+            background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%);
+            border: 1px solid rgba(229, 231, 235, 0.8);
+        }}
+        .dark .balance-card {{
+            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+            border-color: rgba(55, 65, 81, 0.8);
+        }}
+        .btn-primary {{
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            transition: all 0.2s;
+        }}
+        .btn-primary:hover {{
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
+        }}
+        .btn-success {{
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }}
+        .btn-success:hover {{
+            background: linear-gradient(135deg, #059669 0%, #047857 100%);
+            box-shadow: 0 10px 20px rgba(16, 185, 129, 0.3);
+        }}
+        .btn-danger {{
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        }}
+        .btn-danger:hover {{
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            box-shadow: 0 10px 20px rgba(239, 68, 68, 0.3);
+        }}
+        .table-row {{
+            transition: all 0.2s;
+        }}
+        .table-row:hover {{
+            background-color: rgba(59, 130, 246, 0.05);
+        }}
+        .dark .table-row:hover {{
+            background-color: rgba(59, 130, 246, 0.1);
+        }}
+        .stat-card {{
+            background: linear-gradient(135deg, rgba(249, 250, 251, 0.8) 0%, rgba(243, 244, 246, 0.8) 100%);
+            border: 1px solid rgba(229, 231, 235, 0.6);
+        }}
+        .dark .stat-card {{
+            background: linear-gradient(135deg, rgba(31, 41, 55, 0.8) 0%, rgba(17, 24, 39, 0.8) 100%);
+            border-color: rgba(55, 65, 81, 0.6);
         }}
     </style>
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 min-h-screen">
+<body class="bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 min-h-screen">
     <div class="container mx-auto px-4 py-8 max-w-7xl">
         <!-- Header -->
-        <div class="mb-8">
-            <div class="flex items-center justify-between mb-4">
-                <h1 class="text-4xl font-bold text-gray-900 dark:text-white">Upbit Trading Bot</h1>
-                <div class="flex items-center space-x-4">
-                    <div class="flex items-center px-4 py-2 rounded-lg bg-white dark:bg-gray-800 shadow">
+        <div class="mb-10">
+            <div class="flex items-center justify-between mb-6">
+    <div>
+                    <h1 class="text-5xl font-extrabold bg-gradient-to-r from-blue-600 via-purple-600 to-blue-800 dark:from-blue-400 dark:via-purple-400 dark:to-blue-600 bg-clip-text text-transparent mb-2">
+                        Upbit Trading Bot
+                    </h1>
+                    <p class="text-gray-600 dark:text-gray-400 text-sm">AI 기반 자동 매매 시스템</p>
+    </div>
+                <div class="flex items-center space-x-3">
+                    <div class="flex items-center px-5 py-2.5 rounded-xl bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700">
                         <span class="status-indicator {running_status}"></span>
-                        <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                        <span class="text-sm font-bold text-gray-700 dark:text-gray-300">
                             {state.running and "RUNNING" or "STOPPED"}
                         </span>
                     </div>
-                    <div class="px-4 py-2 rounded-lg {'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' if state.dry_run else 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'}">
-                        <span class="text-sm font-semibold">{state.dry_run and "DRY-RUN" or "LIVE"}</span>
+                    <div class="px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm {'bg-gradient-to-r from-blue-500 to-blue-600 text-white dark:from-blue-600 dark:to-blue-700' if state.dry_run else 'bg-gradient-to-r from-orange-500 to-red-600 text-white dark:from-orange-600 dark:to-red-700'}">
+                        {state.dry_run and "DRY-RUN" or "LIVE"}
                     </div>
                 </div>
             </div>
@@ -587,63 +649,69 @@ def _render_dashboard(
         </div>
 
         <!-- AI Analysis Console Window (Always Visible - 5 Lines) -->
-        <div class="mb-6 bg-gray-900 dark:bg-gray-950 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
-            <div class="bg-gray-800 px-4 py-3 border-b border-gray-700 flex items-center justify-between">
-                <h3 class="text-sm font-semibold text-green-400 flex items-center gap-2">
-                    <span>🤖</span>
+        <div class="mb-6 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 dark:from-gray-950 dark:via-gray-900 dark:to-black rounded-2xl shadow-2xl border border-gray-700 dark:border-gray-800 overflow-hidden">
+            <div class="bg-gradient-to-r from-gray-800 to-gray-900 dark:from-gray-900 dark:to-gray-800 px-5 py-4 border-b border-gray-700 dark:border-gray-800 flex items-center justify-between">
+                <h3 class="text-base font-bold text-green-400 flex items-center gap-3">
+                    <span class="text-2xl animate-pulse">🤖</span>
                     <span>AI 분석 콘솔</span>
                 </h3>
-                <button id="console-clear-btn" class="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition">
+                <button id="console-clear-btn" class="px-3 py-1.5 text-xs font-semibold bg-gray-700 hover:bg-gray-600 active:bg-gray-500 text-gray-300 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg">
                     Clear
                 </button>
             </div>
-            <div id="ai-console-content" class="overflow-y-auto p-4 font-mono text-sm text-green-400 bg-gray-900" style="height: 7.5em; line-height: 1.5em;">
-                <div class="text-gray-500">🔄 AI 분석 대기 중...</div>
+            <div id="ai-console-content" class="overflow-y-auto p-5 font-mono text-sm text-green-400 bg-gray-900 dark:bg-black" style="height: 7.5em; line-height: 1.6em;">
+                <div class="text-gray-500 flex items-center gap-2">
+                    <span class="animate-spin">🔄</span>
+                    <span>AI 분석 대기 중...</span>
+                </div>
             </div>
         </div>
 
         <!-- Balance Cards -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <div class="flex items-center justify-between">
+            <div class="balance-card card rounded-2xl shadow-xl p-7 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-green-400/20 to-green-600/10 rounded-full -mr-16 -mt-16"></div>
+                <div class="flex items-center justify-between relative z-10">
                     <div>
-                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">KRW Balance</p>
-                        <p class="text-3xl font-bold text-gray-900 dark:text-white" id="balance-krw">{krw_balance:,.0f}</p>
-                        <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">KRW</p>
+                        <p class="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">KRW 잔액</p>
+                        <p class="text-4xl font-extrabold text-gray-900 dark:text-white mb-1" id="balance-krw">{krw_balance:,.0f}</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-500 font-medium">원화 보유</p>
                     </div>
-                    <div class="w-12 h-12 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center">
-                        <svg class="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    <div class="w-16 h-16 bg-gradient-to-br from-green-400 to-green-600 rounded-2xl flex items-center justify-center shadow-lg">
+                        <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                     </div>
                 </div>
             </div>
             
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <div class="flex items-center justify-between">
+            <div class="balance-card card rounded-2xl shadow-xl p-7 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-purple-400/20 to-purple-600/10 rounded-full -mr-16 -mt-16"></div>
+                <div class="flex items-center justify-between relative z-10">
                     <div>
-                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">Crypto Value</p>
-                        <p class="text-3xl font-bold text-gray-900 dark:text-white" id="balance-crypto">{total_crypto_value:,.0f}</p>
-                        <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">KRW</p>
+                        <p class="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">암호화폐 가치</p>
+                        <p class="text-4xl font-extrabold text-gray-900 dark:text-white mb-1" id="balance-crypto">{total_crypto_value:,.0f}</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-500 font-medium">코인 보유</p>
                     </div>
-                    <div class="w-12 h-12 bg-purple-100 dark:bg-purple-900 rounded-full flex items-center justify-center">
-                        <svg class="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path>
+                    <div class="w-16 h-16 bg-gradient-to-br from-purple-400 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg">
+                        <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path>
                         </svg>
                     </div>
                 </div>
             </div>
             
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <div class="flex items-center justify-between">
+            <div class="balance-card card rounded-2xl shadow-xl p-7 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-blue-400/20 to-blue-600/10 rounded-full -mr-16 -mt-16"></div>
+                <div class="flex items-center justify-between relative z-10">
                     <div>
-                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Balance</p>
-                        <p class="text-3xl font-bold text-gray-900 dark:text-white" id="balance-total">{total_balance:,.0f}</p>
-                        <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">KRW</p>
+                        <p class="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">총 자산</p>
+                        <p class="text-4xl font-extrabold text-gray-900 dark:text-white mb-1" id="balance-total">{total_balance:,.0f}</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-500 font-medium">전체 합계</p>
                     </div>
-                    <div class="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
-                        <svg class="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    <div class="w-16 h-16 bg-gradient-to-br from-blue-400 to-blue-600 rounded-2xl flex items-center justify-center shadow-lg">
+                        <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
                         </svg>
                     </div>
                 </div>
@@ -653,25 +721,28 @@ def _render_dashboard(
         <!-- Server Control & Account -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Controls Card -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">🎮 서버 제어</h2>
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+                    <span class="text-3xl">🎮</span>
+                    <span>서버 제어</span>
+                </h2>
                 
                 <!-- 서버 상태 표시 -->
-                <div class="mb-6 p-4 rounded-lg bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 border border-blue-200 dark:border-blue-800">
+                <div class="mb-6 p-5 rounded-xl bg-gradient-to-br from-blue-50 via-blue-100 to-indigo-50 dark:from-blue-900/30 dark:via-blue-800/20 dark:to-indigo-900/30 border-2 border-blue-200 dark:border-blue-800 shadow-md">
                     <div class="flex items-center justify-between">
-    <div>
-                            <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">서버 상태</p>
-                            <div class="flex items-center gap-2">
-                                <div class="w-3 h-3 rounded-full bg-green-500 animate-pulse" id="server-status-dot"></div>
-                                <span class="text-lg font-bold text-gray-900 dark:text-white" id="server-status-text">Running</span>
+                        <div>
+                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">서버 상태</p>
+                            <div class="flex items-center gap-3">
+                                <div class="w-4 h-4 rounded-full bg-green-500 animate-pulse shadow-lg shadow-green-500/50" id="server-status-dot"></div>
+                                <span class="text-xl font-extrabold text-gray-900 dark:text-white" id="server-status-text">Running</span>
                             </div>
                         </div>
                         <div class="text-right">
-                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">거래 모드</p>
-                            <span class="inline-block px-3 py-1 rounded-full text-sm font-semibold" id="trading-mode-badge">Dry-run</span>
+                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">거래 모드</p>
+                            <span class="inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md {'bg-gradient-to-r from-blue-500 to-blue-600 text-white' if state.dry_run else 'bg-gradient-to-r from-orange-500 to-red-600 text-white'}" id="trading-mode-badge">{state.dry_run and 'Dry-run' or 'LIVE'}</span>
                         </div>
                     </div>
-    </div>
+                </div>
                 
                 <div class="space-y-4">
                     <form method="post" action="/start" class="space-y-3">
@@ -682,21 +753,29 @@ def _render_dashboard(
                                 <option value="live" {'selected' if not state.dry_run else ''}>🔴 Live (실제 거래 - 주의!)</option>
                 </select>
                         </div>
-                        <button type="submit" class="w-full bg-green-600 hover:bg-green-700 active:bg-green-800 text-white font-bold py-3 px-6 rounded-lg transition duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2">
-                            <span>▶️</span>
+                        <button type="submit" class="btn-success w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
                             <span>서버 시작</span>
                         </button>
             </form>
             <form method="post" action="/stop">
-                        <button type="submit" class="w-full bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-bold py-3 px-6 rounded-lg transition duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2">
-                            <span>⏹️</span>
+                        <button type="submit" class="btn-danger w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"></path>
+                            </svg>
                             <span>서버 중지</span>
                         </button>
             </form>
             
             <!-- 강제 탈출 버튼 -->
-            <button id="force-exit-btn" class="w-full bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-bold py-3 px-6 rounded-lg transition duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2">
-                <span>🚪</span>
+            <button id="force-exit-btn" class="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 active:from-orange-700 active:to-red-800 text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                </svg>
                 <span>강제 탈출 (모든 코인 매도)</span>
             </button>
                     
@@ -714,8 +793,11 @@ def _render_dashboard(
                 </div>
             
             <!-- Account Snapshot -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">💼 자산 현황</h2>
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+                    <span class="text-3xl">💼</span>
+                    <span>자산 현황</span>
+                </h2>
                 {f'''
                 <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
                     <div class="flex items-start">
@@ -734,18 +816,18 @@ def _render_dashboard(
                 <div class="overflow-x-auto">
                     <table class="w-full text-sm">
                 <thead>
-                            <tr class="border-b border-gray-200 dark:border-gray-700">
-                                <th class="text-left py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">코인</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">보유량</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">매수가</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">구매금액 (원)</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">현재가</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">현재가치 (원)</th>
+                            <tr class="border-b-2 border-gray-300 dark:border-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800">
+                                <th class="text-left py-4 px-4 font-bold text-gray-800 dark:text-gray-200">코인</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">보유량</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">매수가</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">구매금액 (원)</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가치 (원)</th>
                             </tr>
                 </thead>
                 <tbody>
                             {''.join([f'''
-                            <tr class="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition" onclick="toggleChart('{entry.get('currency', '?')}', this)">
+                            <tr class="table-row border-b border-gray-100 dark:border-gray-700 cursor-pointer transition-all duration-200" onclick="toggleChart('{entry.get('currency', '?')}', this)">
                                 <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')} <span class="text-xs text-gray-400 ml-1">📊</span></td>
                                 <td class="py-3 px-4 text-right text-gray-900 dark:text-white">{float(entry.get('balance', 0)):,.8f}</td>
                                 <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('avg_buy_price', 0)):,.0f}" if entry.get('avg_buy_price') and float(entry.get('avg_buy_price', 0)) > 0 else '-'}</td>
@@ -771,24 +853,27 @@ def _render_dashboard(
         <!-- Statistics & Trade History -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Performance Analysis -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">📊 성과 분석</h2>
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+                    <span class="text-3xl">📊</span>
+                    <span>성과 분석</span>
+                </h2>
                 <div id="statistics" class="space-y-2" style="height: 18em; overflow-y-auto;">
                     <!-- 기본 통계 -->
                     <div class="grid grid-cols-2 gap-2 mb-3">
-                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
+                        <div class="stat-card rounded-xl p-3 shadow-sm">
                             <p class="text-xs text-gray-600 dark:text-gray-400">총 거래</p>
                             <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-total-trades">0</p>
                         </div>
-                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
+                        <div class="stat-card rounded-xl p-3 shadow-sm">
                             <p class="text-xs text-gray-600 dark:text-gray-400">승률</p>
                             <p class="text-lg font-bold text-green-600 dark:text-green-400" id="stat-win-rate">0%</p>
                         </div>
-                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
+                        <div class="stat-card rounded-xl p-3 shadow-sm">
                             <p class="text-xs text-gray-600 dark:text-gray-400">총 수익/손실</p>
                             <p class="text-sm font-bold text-gray-900 dark:text-white" id="stat-total-pnl">0 KRW</p>
                         </div>
-                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
+                        <div class="stat-card rounded-xl p-3 shadow-sm">
                             <p class="text-xs text-gray-600 dark:text-gray-400">평균 수익률</p>
                             <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-avg-profit-pct">0%</p>
                         </div>
@@ -827,21 +912,24 @@ def _render_dashboard(
             </div>
 
             <!-- Trade History -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+                    <span class="text-3xl">📋</span>
+                    <span>거래 내역</span>
+                </h2>
                 <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 18em;">
                     <table class="w-full text-xs">
                         <thead>
-                            <tr class="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">시간</th>
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">코인</th>
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">전략</th>
-                                <th class="text-center py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">신호</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">가격</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">수량</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">총액</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">수익/손실</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">수익률 (%)</th>
+                            <tr class="border-b-2 border-gray-300 dark:border-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800">
+                                <th class="text-left py-3 px-3 font-bold text-gray-800 dark:text-gray-200">시간</th>
+                                <th class="text-left py-3 px-3 font-bold text-gray-800 dark:text-gray-200">코인</th>
+                                <th class="text-left py-3 px-3 font-bold text-gray-800 dark:text-gray-200">전략</th>
+                                <th class="text-center py-3 px-3 font-bold text-gray-800 dark:text-gray-200">신호</th>
+                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">가격</th>
+                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">수량</th>
+                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">총액</th>
+                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">수익/손실</th>
+                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">수익률 (%)</th>
                             </tr>
                         </thead>
                         <tbody id="trade-history-body">
@@ -854,10 +942,13 @@ def _render_dashboard(
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Settings Card -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <button id="settings-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
-                    <h2 class="text-xl font-bold text-gray-900 dark:text-white">⚙️ 설정</h2>
-                    <span class="text-2xl" id="settings-icon">▼</span>
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <button id="settings-toggle" class="w-full flex items-center justify-between py-3 hover:opacity-80 transition" type="button">
+                    <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white flex items-center gap-2">
+                        <span class="text-3xl">⚙️</span>
+                        <span>설정</span>
+                    </h2>
+                    <span class="text-2xl text-gray-400 dark:text-gray-500" id="settings-icon">▼</span>
                 </button>
                 <form id="settings-form" method="post" action="/update-settings" class="space-y-4 mt-4" style="display: none;" data-settings-content>
                     <div>
@@ -937,18 +1028,21 @@ def _render_dashboard(
                     </div>
                     <button 
                         type="submit" 
-                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-200 shadow-md hover:shadow-lg"
+                        class="btn-primary w-full text-white font-bold py-3 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl"
                     >
-                        Update Settings
+                        설정 저장
                     </button>
                 </form>
             </div>
             
             <!-- Status Card -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <button id="status-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
-                    <h2 class="text-xl font-bold text-gray-900 dark:text-white">📊 상태</h2>
-                    <span class="text-2xl" id="status-icon">▼</span>
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <button id="status-toggle" class="w-full flex items-center justify-between py-3 hover:opacity-80 transition" type="button">
+                    <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white flex items-center gap-2">
+                        <span class="text-3xl">📊</span>
+                        <span>상태</span>
+                    </h2>
+                    <span class="text-2xl text-gray-400 dark:text-gray-500" id="status-icon">▼</span>
                 </button>
                 <div class="space-y-3 mt-4" id="status-content" style="display: none;">
                     <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
