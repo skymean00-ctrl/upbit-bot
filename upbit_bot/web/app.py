@@ -892,31 +892,7 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Trade History (Full Width) -->
-        <div class="mb-8">
-            <!-- Trade History -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
-                <div id="trade-history" class="overflow-x-auto">
-                    <table class="w-full text-sm">
-                        <thead>
-                            <tr class="border-b border-gray-200 dark:border-gray-700">
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">시간</th>
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">전략</th>
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">신호</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">가격</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">수량</th>
-                            </tr>
-                        </thead>
-                        <tbody id="trade-history-body">
-                            <tr><td colspan="5" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">로딩 중...</td></tr>
-                </tbody>
-            </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- Statistics -->
+        <!-- Statistics (First) -->
         <div class="mb-8">
             <!-- Performance Analysis -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
@@ -976,6 +952,30 @@ def _render_dashboard(
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trade History (Full Width) -->
+        <div class="mb-8">
+            <!-- Trade History -->
+            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
+                <div id="trade-history" class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-200 dark:border-gray-700">
+                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">시간</th>
+                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">전략</th>
+                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">신호</th>
+                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">가격</th>
+                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">수량</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trade-history-body">
+                            <tr><td colspan="5" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">로딩 중...</td></tr>
+                </tbody>
+            </table>
                 </div>
             </div>
         </div>
