@@ -892,70 +892,66 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Statistics & Trade History (2 Columns) -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <!-- Statistics & Trade History (3 Columns) -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
             <!-- Performance Analysis (Left) -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">📊 성과 분석</h2>
                 <div id="statistics" class="space-y-2" style="height: 18em; overflow-y-auto;">
                     <!-- 기본 통계 -->
-                    <div class="grid grid-cols-4 gap-3 mb-3">
+                    <div class="grid grid-cols-2 gap-2 mb-3">
                         <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
                             <p class="text-xs text-gray-600 dark:text-gray-400">총 거래</p>
-                            <p class="text-xl font-bold text-gray-900 dark:text-white" id="stat-total-trades">0</p>
+                            <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-total-trades">0</p>
                         </div>
                         <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
                             <p class="text-xs text-gray-600 dark:text-gray-400">승률</p>
-                            <p class="text-xl font-bold text-green-600 dark:text-green-400" id="stat-win-rate">0%</p>
+                            <p class="text-lg font-bold text-green-600 dark:text-green-400" id="stat-win-rate">0%</p>
                         </div>
                         <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
                             <p class="text-xs text-gray-600 dark:text-gray-400">총 수익/손실</p>
-                            <p class="text-xl font-bold text-gray-900 dark:text-white" id="stat-total-pnl">0 KRW</p>
+                            <p class="text-sm font-bold text-gray-900 dark:text-white" id="stat-total-pnl">0 KRW</p>
                         </div>
                         <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
                             <p class="text-xs text-gray-600 dark:text-gray-400">평균 수익률</p>
-                            <p class="text-xl font-bold text-gray-900 dark:text-white" id="stat-avg-profit-pct">0%</p>
+                            <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-avg-profit-pct">0%</p>
                         </div>
                     </div>
                     
                     <!-- 상세 분석 -->
                     <div class="border-t border-gray-200 dark:border-gray-700 pt-2">
-                        <div class="grid grid-cols-4 gap-2 text-xs">
+                        <div class="grid grid-cols-2 gap-2 text-xs">
                             <div>
-                                <span class="text-gray-600 dark:text-gray-400">승리 거래</span>
+                                <span class="text-gray-600 dark:text-gray-400">승리</span>
                                 <p class="font-bold text-green-600 dark:text-green-400" id="stat-winning-trades">0</p>
                             </div>
                             <div>
-                                <span class="text-gray-600 dark:text-gray-400">손실 거래</span>
+                                <span class="text-gray-600 dark:text-gray-400">손실</span>
                                 <p class="font-bold text-red-600 dark:text-red-400" id="stat-losing-trades">0</p>
                             </div>
                             <div>
                                 <span class="text-gray-600 dark:text-gray-400">평균 수익</span>
-                                <p class="font-bold text-green-600 dark:text-green-400" id="stat-avg-win">0 KRW</p>
+                                <p class="font-bold text-green-600 dark:text-green-400 text-xs" id="stat-avg-win">0</p>
                             </div>
                             <div>
                                 <span class="text-gray-600 dark:text-gray-400">평균 손실</span>
-                                <p class="font-bold text-red-600 dark:text-red-400" id="stat-avg-loss">0 KRW</p>
+                                <p class="font-bold text-red-600 dark:text-red-400 text-xs" id="stat-avg-loss">0</p>
                             </div>
                             <div>
                                 <span class="text-gray-600 dark:text-gray-400">수익 팩터</span>
                                 <p class="font-bold text-gray-900 dark:text-white" id="stat-profit-factor">0.00</p>
                             </div>
                             <div>
-                                <span class="text-gray-600 dark:text-gray-400">최대낙폭 (MDD)</span>
-                                <p class="font-bold text-red-600 dark:text-red-400" id="stat-max-dd">0 KRW</p>
-                            </div>
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">Sharpe Ratio</span>
-                                <p class="font-bold text-gray-900 dark:text-white" id="stat-sharpe">0.00</p>
+                                <span class="text-gray-600 dark:text-gray-400">MDD</span>
+                                <p class="font-bold text-red-600 dark:text-red-400 text-xs" id="stat-max-dd">0</p>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Trade History (Right) -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <!-- Trade History (Right - 2 columns wide) -->
+            <div class="lg:col-span-2 card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
                 <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 18em;">
                     <table class="w-full text-xs">
