@@ -254,6 +254,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "daily": daily_stats,
         })
 
+    @app.get("/chart/{market}")
+    async def get_chart_data(market: str, candles: int = 100) -> JSONResponse:
+        """Get candle data for chart."""
+        try:
+            # 시장 이름 정규화 (예: BTC -> KRW-BTC)
+            if not market.startswith("KRW-"):
+                market = f"KRW-{market}"
+            
+            # 100개 봉 조회
+            candle_data = controller.engine.client.get_candles(market, unit=5, count=candles)
+            
+            if not candle_data:
+                return JSONResponse({"error": f"No data for {market}"}, status_code=404)
+            
+            # 차트용으로 변환
+            chart_data = []
+            for c in candle_data:
+                # Candle 객체 또는 dict 형식 지원
+                if isinstance(c, dict):
+                    chart_data.append({
+                        "time": c.get("candle_date_time_utc", c.get("timestamp", "")),
+                        "open": float(c.get("opening_price", 0)),
+                        "high": float(c.get("high_price", 0)),
+                        "low": float(c.get("low_price", 0)),
+                        "close": float(c.get("trade_price", 0)),
+                        "volume": float(c.get("candle_acc_trade_volume", 0)),
+                    })
+                else:
+                    # Candle 객체
+                    chart_data.append({
+                        "time": c.timestamp,
+                        "open": float(c.open),
+                        "high": float(c.high),
+                        "low": float(c.low),
+                        "close": float(c.close),
+                        "volume": float(c.volume),
+                    })
+            
+            return JSONResponse({"data": chart_data, "market": market})
+        except Exception as e:  # noqa: BLE001
+            LOGGER.error(f"Failed to get chart data for {market}: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     @app.post("/record-trade")
     async def record_trade(
         strategy: str = Form(...),
@@ -751,11 +794,20 @@ def _render_dashboard(
                 </thead>
                 <tbody>
                             {''.join([f'''
-                            <tr class="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
-                                <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')}</td>
+                            <tr class="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition" onclick="toggleChart('{entry.get('currency', '?')}', this)">
+                                <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')} <span class="text-xs text-gray-400 ml-1">📊</span></td>
                                 <td class="py-3 px-4 text-right text-gray-900 dark:text-white">{float(entry.get('balance', 0)):,.8f}</td>
                                 <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('current_price', 0)):,.0f}" if entry.get('current_price') and float(entry.get('current_price', 0)) > 0 else '-'}</td>
                                 <td class="py-3 px-4 text-right font-medium text-green-600 dark:text-green-400">{f"{float(entry.get('crypto_value', 0)):,.0f}" if entry.get('crypto_value') else '-'}</td>
+                            </tr>
+                            <tr id="chart-row-{entry.get('currency', '?')}" class="hidden">
+                                <td colspan="4" class="py-4 px-4">
+                                    <div id="chart-container-{entry.get('currency', '?')}" class="w-full h-64 bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
+                                        <div class="flex items-center justify-center h-full text-gray-500">
+                                            <span>📈 차트 로딩 중...</span>
+                                        </div>
+                                    </div>
+                                </td>
                             </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="4" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">보유한 거래 가능한 코인이 없습니다</td></tr>'}
                         </tbody>
                     </table>
@@ -864,8 +916,138 @@ def _render_dashboard(
         </div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script>
         const STRATEGY_INFO = {json.dumps({k: v for k, v in strategy_info.items()}, ensure_ascii=False)};
+        let currentChartInstance = null;
+        
+        // 차트 토글 및 렌더링
+        async function toggleChart(currency, row) {{
+            const chartRow = document.getElementById(`chart-row-${{currency}}`);
+            
+            if (chartRow.classList.contains('hidden')) {{
+                // 차트 표시
+                chartRow.classList.remove('hidden');
+                
+                // 이미 차트가 있으면 스킵
+                const container = document.getElementById(`chart-container-${{currency}}`);
+                if (container.children.length > 1) return;
+                
+                // 차트 데이터 로드
+                try {{
+                    const response = await fetch(`/chart/${{currency}}`);
+                    const result = await response.json();
+                    
+                    if (result.data && result.data.length > 0) {{
+                        renderChart(currency, result.data);
+                    }} else {{
+                        container.innerHTML = '<div class="flex items-center justify-center h-full text-gray-500">데이터 없음</div>';
+                    }}
+                }} catch (err) {{
+                    console.error(`Chart load error for ${{currency}}:`, err);
+                    container.innerHTML = `<div class="flex items-center justify-center h-full text-red-500">차트 로드 실패</div>`;
+                }}
+            }} else {{
+                // 차트 숨기기
+                chartRow.classList.add('hidden');
+            }}
+        }}
+        
+        // Chart.js로 차트 렌더링
+        function renderChart(currency, candles) {{
+            const container = document.getElementById(`chart-container-${{currency}}`);
+            
+            // 기존 캔버스 제거
+            const existingCanvas = container.querySelector('canvas');
+            if (existingCanvas) existingCanvas.remove();
+            
+            // 새 캔버스 생성
+            const canvas = document.createElement('canvas');
+            container.innerHTML = '';
+            container.appendChild(canvas);
+            
+            // 데이터 처리
+            const times = candles.map(c => {{
+                const d = new Date(c.time);
+                return d.toLocaleTimeString('ko-KR', {{ hour: '2-digit', minute: '2-digit' }});
+            }});
+            
+            const closes = candles.map(c => c.close);
+            const opens = candles.map(c => c.open);
+            
+            // 차트 색상 (상승/하강)
+            const colors = candles.map(c => c.close >= c.open ? 'rgba(34, 197, 94, 1)' : 'rgba(239, 68, 68, 1)');
+            const bgColors = candles.map(c => c.close >= c.open ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)');
+            
+            // Chart.js 차트 생성
+            if (currentChartInstance) {{
+                currentChartInstance.destroy();
+            }}
+            
+            currentChartInstance = new Chart(canvas, {{
+                type: 'line',
+                data: {{
+                    labels: times,
+                    datasets: [
+                        {{
+                            label: '종가',
+                            data: closes,
+                            borderColor: 'rgb(59, 130, 246)',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.1,
+                            pointRadius: 2,
+                            pointBackgroundColor: 'rgb(59, 130, 246)',
+                            pointHoverRadius: 4,
+                        }},
+                    ]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {{
+                        legend: {{
+                            display: true,
+                            labels: {{
+                                color: document.body.classList.contains('dark') ? '#e5e7eb' : '#374151',
+                                font: {{ size: 12 }}
+                            }}
+                        }},
+                        title: {{
+                            display: true,
+                            text: `${{currency}} - 5분봉 (최근 100개)`,
+                            color: document.body.classList.contains('dark') ? '#f3f4f6' : '#111827',
+                            font: {{ size: 14, weight: 'bold' }}
+                        }}
+                    }},
+                    scales: {{
+                        y: {{
+                            beginAtZero: false,
+                            grid: {{
+                                color: document.body.classList.contains('dark') ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
+                            }},
+                            ticks: {{
+                                color: document.body.classList.contains('dark') ? '#d1d5db' : '#6b7280',
+                                callback: function(value) {{
+                                    return value.toLocaleString();
+                                }}
+                            }}
+                        }},
+                        x: {{
+                            grid: {{
+                                display: false
+                            }},
+                            ticks: {{
+                                color: document.body.classList.contains('dark') ? '#d1d5db' : '#6b7280',
+                                maxRotation: 45,
+                                minRotation: 0
+                            }}
+                        }}
+                    }}
+                }}
+            }});
+        }}
         
         // 전략 설명 업데이트
         function updateStrategyDescription(strategyKey) {{
