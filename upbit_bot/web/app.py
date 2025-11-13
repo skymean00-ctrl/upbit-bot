@@ -892,8 +892,8 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Trade History & Statistics -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <!-- Trade History (Full Width) -->
+        <div class="mb-8">
             <!-- Trade History -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
@@ -914,8 +914,11 @@ def _render_dashboard(
             </table>
                 </div>
             </div>
+        </div>
 
-            <!-- Statistics -->
+        <!-- Statistics -->
+        <div class="mb-8">
+            <!-- Performance Analysis -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">📊 성과 분석</h2>
                 <div id="statistics" class="space-y-3">
