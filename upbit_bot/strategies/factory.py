@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+from .ai_market_analyzer import AIMarketAnalyzer
 from .base import Strategy
+from .bb_squeeze import BBSqueezeStrategy
 from .ma_crossover import MovingAverageCrossoverStrategy
+from .macd_crossover import MACDCrossoverStrategy
+from .mixed_bb_rsi_ma import MixedBBRSIMAStrategy
 from .portfolio import CompositeStrategy
 from .rsi_trend_filter import RSITrendFilterStrategy
+from .support_resistance import SupportResistanceStrategy
+from .volatility_breakout import VolatilityBreakoutStrategy
+from .volume_profile import VolumeProfileStrategy
 
 _REGISTRY: dict[str, type[Strategy]] = {
     MovingAverageCrossoverStrategy.name: MovingAverageCrossoverStrategy,
     RSITrendFilterStrategy.name: RSITrendFilterStrategy,
+    VolatilityBreakoutStrategy.name: VolatilityBreakoutStrategy,
+    MixedBBRSIMAStrategy.name: MixedBBRSIMAStrategy,
+    MACDCrossoverStrategy.name: MACDCrossoverStrategy,
+    BBSqueezeStrategy.name: BBSqueezeStrategy,
+    SupportResistanceStrategy.name: SupportResistanceStrategy,
+    VolumeProfileStrategy.name: VolumeProfileStrategy,
+    AIMarketAnalyzer.name: AIMarketAnalyzer,
 }
 
 

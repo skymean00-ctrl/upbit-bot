@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from threading import Event, Thread
 
 from upbit_bot.core import UpbitClient
+from upbit_bot.data.trade_history import TradeHistoryStore
 from upbit_bot.strategies import Candle, Strategy, StrategySignal
 from upbit_bot.utils.notifications import Notifier
 
@@ -33,6 +34,7 @@ class ExecutionEngine:
         position_sizer: PositionSizer | None = None,
         notifiers: Sequence[Notifier] | None = None,
         min_order_amount: float = 5000.0,
+        trade_history_store: TradeHistoryStore | None = None,
     ) -> None:
         self.client = client
         self.strategy = strategy
@@ -54,6 +56,24 @@ class ExecutionEngine:
         self.last_order_info: dict | None = None
         self.last_run_at: datetime | None = None
         self.last_error: str | None = None
+        self.trade_history_store = trade_history_store or TradeHistoryStore()
+        self._load_positions()
+
+    def _load_positions(self) -> None:
+        """Load open positions from trade history."""
+        try:
+            open_positions = self.trade_history_store.get_open_positions(market=self.market)
+            if open_positions:
+                latest_position = open_positions[0]
+                self.position_price = latest_position.get("entry_price")
+                self.position_volume = latest_position.get("entry_volume")
+                LOGGER.info(
+                    "Loaded position: price=%.0f, volume=%.8f",
+                    self.position_price or 0.0,
+                    self.position_volume or 0.0,
+                )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to load positions: %s", exc)
 
     def _fetch_candles(self) -> list[Candle]:
         raw = self.client.get_candles(self.market, unit=self.candle_unit, count=self.candle_count)
@@ -129,6 +149,33 @@ class ExecutionEngine:
                     "price": last_candle.close,
                 }
                 self.last_order_info = info
+                
+                # Save trade history
+                try:
+                    balance_before = self.position_sizer.balance_fetcher() if self.position_sizer else None
+                    position_id = self.trade_history_store.save_position(
+                        market=self.market,
+                        strategy=self.strategy.name,
+                        entry_price=last_candle.close,
+                        entry_volume=est_volume,
+                        entry_amount=stake,
+                    )
+                    self.trade_history_store.save_trade(
+                        market=self.market,
+                        strategy=self.strategy.name,
+                        signal=signal.value,
+                        side="buy",
+                        price=last_candle.close,
+                        volume=est_volume,
+                        amount=stake,
+                        dry_run=self.dry_run,
+                        balance_before=balance_before,
+                        balance_after=balance_before - stake if balance_before else None,
+                    )
+                    LOGGER.debug("Trade history saved: position_id=%s", position_id)
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning("Failed to save trade history: %s", exc)
+                
                 self._notify(
                     "Dry-run BUY executed",
                     market=self.market,
@@ -150,6 +197,36 @@ class ExecutionEngine:
                 balance = self.position_sizer.balance_fetcher() if self.position_sizer else stake
                 stake_pct = (stake / balance * 100) if balance else 0.0
                 self.risk_manager.register_entry(self.market, stake_pct=stake_pct)
+            
+            # Save trade history
+            try:
+                balance_before = self.position_sizer.balance_fetcher() if self.position_sizer else None
+                order_id = response.get("uuid") if isinstance(response, dict) else None
+                position_id = self.trade_history_store.save_position(
+                    market=self.market,
+                    strategy=self.strategy.name,
+                    entry_price=last_candle.close,
+                    entry_volume=est_volume,
+                    entry_amount=stake,
+                )
+                self.trade_history_store.save_trade(
+                    market=self.market,
+                    strategy=self.strategy.name,
+                    signal=signal.value,
+                    side="buy",
+                    price=last_candle.close,
+                    volume=est_volume,
+                    amount=stake,
+                    order_id=order_id,
+                    order_response=response,
+                    dry_run=self.dry_run,
+                    balance_before=balance_before,
+                    balance_after=balance_before - stake if balance_before else None,
+                )
+                LOGGER.debug("Trade history saved: position_id=%s", position_id)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Failed to save trade history: %s", exc)
+            
             self.last_order_info = response
             self._notify(
                 "Live BUY placed",
@@ -184,6 +261,36 @@ class ExecutionEngine:
                 "pnl_pct": pnl_pct,
             }
             self.last_order_info = info
+            
+            # Save trade history and close position
+            try:
+                open_positions = self.trade_history_store.get_open_positions(market=self.market)
+                if open_positions:
+                    position_id = open_positions[0]["id"]
+                    sell_amount = (self.position_volume or 0.0) * last_candle.close
+                    self.trade_history_store.close_position(
+                        position_id=position_id,
+                        exit_price=last_candle.close,
+                        exit_volume=self.position_volume or 0.0,
+                        exit_amount=sell_amount,
+                    )
+                    balance_before = self.position_sizer.balance_fetcher() if self.position_sizer else None
+                    self.trade_history_store.save_trade(
+                        market=self.market,
+                        strategy=self.strategy.name,
+                        signal=signal.value,
+                        side="sell",
+                        price=last_candle.close,
+                        volume=self.position_volume or 0.0,
+                        amount=sell_amount,
+                        dry_run=self.dry_run,
+                        balance_before=balance_before,
+                        balance_after=balance_before + sell_amount if balance_before else None,
+                    )
+                    LOGGER.debug("Trade history saved: position_id=%s closed", position_id)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Failed to save trade history: %s", exc)
+            
             self._notify(
                 "Dry-run SELL executed",
                 market=self.market,
@@ -207,6 +314,39 @@ class ExecutionEngine:
         LOGGER.debug("Order response: %s", response)
         if self.risk_manager:
             self.risk_manager.register_exit(self.market, pnl_pct=pnl_pct)
+        
+        # Save trade history and close position
+        try:
+            open_positions = self.trade_history_store.get_open_positions(market=self.market)
+            if open_positions:
+                position_id = open_positions[0]["id"]
+                sell_amount = (self.position_volume or 0.0) * last_candle.close
+                self.trade_history_store.close_position(
+                    position_id=position_id,
+                    exit_price=last_candle.close,
+                    exit_volume=self.position_volume or 0.0,
+                    exit_amount=sell_amount,
+                )
+                balance_before = self.position_sizer.balance_fetcher() if self.position_sizer else None
+                order_id = response.get("uuid") if isinstance(response, dict) else None
+                self.trade_history_store.save_trade(
+                    market=self.market,
+                    strategy=self.strategy.name,
+                    signal=signal.value,
+                    side="sell",
+                    price=last_candle.close,
+                    volume=self.position_volume or 0.0,
+                    amount=sell_amount,
+                    order_id=order_id,
+                    order_response=response,
+                    dry_run=self.dry_run,
+                    balance_before=balance_before,
+                    balance_after=balance_before + sell_amount if balance_before else None,
+                )
+                LOGGER.debug("Trade history saved: position_id=%s closed", position_id)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to save trade history: %s", exc)
+        
         self.last_order_info = response
         self._notify(
             "Live SELL placed",

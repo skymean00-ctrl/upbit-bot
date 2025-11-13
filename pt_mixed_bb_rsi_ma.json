@@ -1,0 +1,22 @@
+{
+    "strategy": "mixed_bb_rsi_ma",
+    "initial_balance": 50000.0,
+    "final_balance": 50000.0,
+    "total_return_pct": 0.0,
+    "candles_processed": 200,
+    "stats": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "open_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "win_rate_pct": 0.0,
+        "total_pnl": 0.0,
+        "avg_win": 0.0,
+        "avg_loss": 0.0,
+        "max_win": 0.0,
+        "max_loss": 0.0,
+        "profit_factor": 0.0
+    },
+    "trades": []
+}

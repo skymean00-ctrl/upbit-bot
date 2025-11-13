@@ -14,7 +14,7 @@ from upbit_bot.web import create_app
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Upbit bot web dashboard")
     parser.add_argument("--host", default="0.0.0.0", help="Host address to bind.")
-    parser.add_argument("--port", type=int, default=8000, help="Port to listen on.")
+    parser.add_argument("--port", type=int, default=8080, help="Port to listen on.")
     parser.add_argument(
         "--reload",
         action="store_true",
@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    settings = load_settings(env_path=args.env_file) if args.env_file else None
+    settings = load_settings(env_path=args.env_file) if args.env_file else load_settings()
     app = create_app(settings=settings)
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
     return 0

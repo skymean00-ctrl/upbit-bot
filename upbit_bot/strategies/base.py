@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -24,10 +24,14 @@ class StrategySignal(str, Enum):
     SELL = "sell"
 
 
-class BaseStrategy(Protocol):
-    """Callable protocol used by the execution engine."""
+class Strategy(ABC):
+    """Base class that concrete strategies extend for signal generation."""
 
     name: str
 
+    @abstractmethod
     def on_candles(self, candles: Iterable[Candle]) -> StrategySignal:
         """Return the next signal based on incoming candles."""
+
+
+BaseStrategy = Strategy

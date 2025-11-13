@@ -1,45 +1,31 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
-from pydantic import Field
-
-from .base import BaseStrategy, StrategySignal
-
-if TYPE_CHECKING:
-    from .base import Candle
+from .base import Candle, Strategy, StrategySignal
 
 
-class CombinedStrategy(BaseStrategy):
+class CombinedStrategy(Strategy):
     name = "combined_strategy"
 
-    sub_strategies: list[BaseStrategy]
+    def __init__(self, sub_strategies: list[Strategy]) -> None:
+        if not sub_strategies:
+            raise ValueError("At least one sub-strategy is required.")
+        self.sub_strategies = list(sub_strategies)
 
-    def __init__(self, sub_strategies: list[BaseStrategy], **data):
-        super().__init__(**data)
-        if not all(isinstance(s, BaseStrategy) for s in sub_strategies):
-            raise TypeError("All sub_strategies must be instances of BaseStrategy.")
-        self.sub_strategies = sub_strategies
-
-    def determine_signal(self, candles: list[Candle]) -> StrategySignal:
-        if not self.sub_strategies:
+    def on_candles(self, candles: Iterable[Candle]) -> StrategySignal:
+        signals = [strategy.on_candles(candles) for strategy in self.sub_strategies]
+        if not signals:
             return StrategySignal.HOLD
 
-        signals = []
-        for strat in self.sub_strategies:
-            signals.append(strat.determine_signal(candles))
-
         signal_counts = Counter(signals)
-
         buy_count = signal_counts.get(StrategySignal.BUY, 0)
         sell_count = signal_counts.get(StrategySignal.SELL, 0)
         hold_count = signal_counts.get(StrategySignal.HOLD, 0)
 
         if buy_count > sell_count and buy_count > hold_count:
             return StrategySignal.BUY
-        elif sell_count > buy_count and sell_count > hold_count:
+        if sell_count > buy_count and sell_count > hold_count:
             return StrategySignal.SELL
-        else:
-            return StrategySignal.HOLD
-
+        return StrategySignal.HOLD

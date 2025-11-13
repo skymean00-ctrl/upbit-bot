@@ -1,75 +1,63 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
+import numpy as np
 import pandas as pd
-from pydantic import Field
 
-from upbit_bot.strategies.base import BaseStrategy, StrategySignal
-
-if TYPE_CHECKING:
-    from upbit_bot.strategies import Candle
+from upbit_bot.strategies.base import Candle, Strategy, StrategySignal
 
 
-class RSITrendFilterStrategy(BaseStrategy):
-    """
-    RSI와 이동평균선을 결합한 매매 전략.
-    RSI 과매수/과매도 신호를 이동평균선 추세로 필터링합니다.
-    """
+class RSITrendFilterStrategy(Strategy):
+    name = "rsi_trend_filter"
 
-    rsi_window: int = Field(14, description="RSI 계산에 사용할 기간 (window)")
-    ma_window: int = Field(50, description="이동평균선 계산에 사용할 기간 (window)"ption="이동평균선 계산에 사용할 기간 (window)")
-    bb_window: int = Field(20, description="볼린저 밴드 계산에 사용할 기간 (window)")
-    bb_num_std_dev: float = Field(2.0, description="볼린저 밴드 표준편차 배수")
-    bb_window: int = Field(20, description="볼린저 밴드 계산에 사용할 기간 (window)")
-    bb_num_std_dev: float = Field(2.0, description="볼린저 밴드 표준편차 배수")ption="이동평균선 계산에 사용할 기간 (window)")ption="이동평균선 계산에 사용할 기간 (window)")ption="이동평균선 계산에 사용할 기간 (window)")
-    bb_window: int = Field(20, description="볼린저 밴드 계산에 사용할 기간 (window)")
-    bb_num_std_dev: float = Field(2.0, description="볼린저 밴드 표준편차 배수")ption="이동평균선 계산에 사용할 기간 (window)")
-    rsi_oversold: int = Field(30, description="RSI 과매도 기준")
-    rsi_overbought: int = Field(70, description="RSI 과매수 기준")
+    def __init__(
+        self,
+        rsi_window: int = 14,
+        ma_window: int = 50,
+        rsi_oversold: int = 30,
+        rsi_overbought: int = 70,
+    ) -> None:
+        self.rsi_window = rsi_window
+        self.ma_window = ma_window
+        self.rsi_oversold = rsi_oversold
+        self.rsi_overbought = rsi_overbought
 
-    def get_signal(self, candles: list[Candle]) -> StrategySignal | None:
-        df = pd.DataFrame([c.model_dump() for c in candles])
-        df[close] = pd.to_numeric(df[trade_price])
+    def on_candles(self, candles: Iterable[Candle]) -> StrategySignal:
+        buffer = list(candles)
+        required = max(self.rsi_window, self.ma_window) + 1
+        if len(buffer) < required:
+            return StrategySignal.HOLD
 
-        # RSI 계산
-        delta = df[close].diff()
-        gain = (delta.where(delta > 0, 0)).fillna(0)
-        loss = (-delta.where(delta < 0, 0)).fillna(0)
+        df = pd.DataFrame([c.__dict__ for c in buffer])
+        closes = df["close"]
 
-        avg_gain = gain.rolling(window=self.rsi_window, min_periods=1).mean()
-        avg_loss = loss.rolling(window=self.rsi_window, min_periods=1).mean()
+        ma = closes.rolling(window=self.ma_window, min_periods=1).mean()
 
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        df[rsi] = rsi
+        delta = closes.diff()
+        gain = delta.clip(lower=0).rolling(window=self.rsi_window, min_periods=1).mean()
+        loss = (-delta.clip(upper=0)).rolling(window=self.rsi_window, min_periods=1).mean()
+        rs = gain / loss.replace(0, np.nan)
+        rsi = 100 - (100 / (1 + rs.fillna(0)))
 
-        # 이동평균선 계산
-        df[ma] = df[close].rolling(window=self.ma_window, min_periods=1).mean()
+        previous_rsi = rsi.iloc[-2]
+        current_rsi = rsi.iloc[-1]
+        current_close = closes.iloc[-1]
+        previous_ma = ma.iloc[-2]
+        current_ma = ma.iloc[-1]
 
-        if len(df) < self.ma_window or len(df) < self.rsi_window:
-            return None # 충분한 데이터가 없으면 신호 없음
-
-        current_rsi = df[rsi].iloc[-1]
-        previous_rsi = df[rsi].iloc[-2] if len(df) > 1 else None
-        current_close = df[close].iloc[-1]
-        current_ma = df[ma].iloc[-1]
-
-        # 매수 조건:
-        # 1. RSI가 과매도 구간(rsi_oversold) 아래에 있다가 위로 상승
-        # 2. 현재 가격이 이동평균선 위에 있음 (상승 추세 필터링)
-        if previous_rsi is not None and \
-           previous_rsi <= self.rsi_oversold and current_rsi > self.rsi_oversold and \
-           current_close > current_ma:
+        if (
+            previous_rsi <= self.rsi_oversold
+            and current_rsi > self.rsi_oversold
+            and current_close > current_ma
+        ):
             return StrategySignal.BUY
 
-        # 매도 조건:
-        # 1. RSI가 과매수 구간(rsi_overbought) 위에 있다가 아래로 하락
-        # 2. 현재 가격이 이동평균선 아래에 있음 (하락 추세 필터링)
-        if previous_rsi is not None and \
-           previous_rsi >= self.rsi_overbought and current_rsi < self.rsi_overbought and \
-           current_close < current_ma:
+        if (
+            previous_rsi >= self.rsi_overbought
+            and current_rsi < self.rsi_overbought
+            and current_close < current_ma
+        ):
             return StrategySignal.SELL
 
-        return None # 매매 신호 없음
-
+        return StrategySignal.HOLD

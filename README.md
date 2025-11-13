@@ -113,7 +113,7 @@ pytest
 FastAPI 기반 대시보드에서 실행 상태, 최근 시그널, 계좌 잔액을 확인하고 봇을 시작/정지할 수 있습니다.
 
 ```bash
-python scripts/web_dashboard.py --host 0.0.0.0 --port 8000
+python scripts/web_dashboard.py --host 0.0.0.0 --port 8080
 ```
 
 브라우저에서 `http://<host>:<port>/`로 접속하면 현재 상태가 15초마다 자동 갱신되며, 드라이런/라이브 모드를 선택해 실행할 수 있습니다. 기본값은 드라이런입니다.

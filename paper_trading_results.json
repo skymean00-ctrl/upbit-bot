@@ -1,0 +1,50 @@
+{
+    "strategy": "ma_crossover",
+    "initial_balance": 1000000.0,
+    "final_balance": 1000122.6120422764,
+    "total_return_pct": 0.012261204227637101,
+    "candles_processed": 200,
+    "stats": {
+        "total_trades": 3,
+        "closed_trades": 3,
+        "open_trades": 0,
+        "winning_trades": 2,
+        "losing_trades": 1,
+        "win_rate_pct": 66.66666666666666,
+        "total_pnl": 122.61204227643746,
+        "avg_win": 78.07353661590793,
+        "avg_loss": -33.53503095537839,
+        "max_win": 97.04623208790669,
+        "max_loss": -33.53503095537839,
+        "profit_factor": 2.3281188175968093
+    },
+    "trades": [
+        {
+            "entry_time": "2025-10-30T11:02:57.650000",
+            "entry_price": 162809000.0,
+            "exit_time": "2025-10-30T11:41:59.792000",
+            "exit_price": 163125000.0,
+            "pnl": 97.04623208790669,
+            "pnl_pct": 0.19409246417581016,
+            "status": "closed"
+        },
+        {
+            "entry_time": "2025-10-30T12:41:57",
+            "entry_price": 162450000.0,
+            "exit_time": "2025-10-30T13:06:54.639000",
+            "exit_price": 162642000.0,
+            "pnl": 59.100841143909165,
+            "pnl_pct": 0.11819021237304828,
+            "status": "closed"
+        },
+        {
+            "entry_time": "2025-10-30T13:36:58.350000",
+            "entry_price": 162542000.0,
+            "exit_time": "2025-10-30T13:38:54.477000",
+            "exit_price": 162433000.0,
+            "pnl": -33.53503095537839,
+            "pnl_pct": -0.0670595907519278,
+            "status": "closed"
+        }
+    ]
+}
