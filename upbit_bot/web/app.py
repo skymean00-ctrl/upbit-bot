@@ -650,130 +650,6 @@ def _render_dashboard(
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Settings Card -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <button id="settings-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
-                    <h2 class="text-xl font-bold text-gray-900 dark:text-white">⚙️ 설정</h2>
-                    <span class="text-2xl" id="settings-icon">▼</span>
-                </button>
-                <form id="settings-form" method="post" action="/update-settings" class="space-y-4 mt-4" style="display: none;" data-settings-content>
-                    <div>
-                        <label for="strategy-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            Strategy
-                        </label>
-                        <select 
-                            id="strategy-select" 
-                            name="strategy" 
-                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            onchange="updateStrategyDescription(this.value)"
-                        >
-                            {''.join([f'''
-                            <option value="{strategy_key}" {'selected' if state.strategy == strategy_key else ''}>
-                                {strategy_info.get(strategy_key, {}).get('name', strategy_key)}
-                            </option>
-                            ''' for strategy_key in AVAILABLE_STRATEGIES])}
-                </select>
-                        <div id="strategy-description" class="mt-2 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                            <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">
-                                <strong>{strategy_info.get(state.strategy, {}).get('name', '알 수 없음')}</strong>
-                            </p>
-                            <p class="text-xs text-gray-500 dark:text-gray-500">
-                                {strategy_info.get(state.strategy, {}).get('description', '설명 없음')}
-                            </p>
-                            <div class="mt-2 flex gap-2">
-                                <span class="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
-                                    리스크: {strategy_info.get(state.strategy, {}).get('risk', 'N/A')}
-                                </span>
-                                <span class="text-xs px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded">
-                                    적합: {strategy_info.get(state.strategy, {}).get('best_for', 'N/A')}
-                                </span>
-                            </div>
-                        </div>
-                    </div>
-                    <div>
-                        <label for="market-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            Market
-                        </label>
-                        <select 
-                            id="market-select" 
-                            name="market" 
-                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        >
-                            <option value="KRW-BTC" {'selected' if state.market == 'KRW-BTC' else ''}>KRW-BTC</option>
-                            <option value="KRW-ETH" {'selected' if state.market == 'KRW-ETH' else ''}>KRW-ETH</option>
-                            <option value="KRW-XRP" {'selected' if state.market == 'KRW-XRP' else ''}>KRW-XRP</option>
-                            <option value="KRW-ADA" {'selected' if state.market == 'KRW-ADA' else ''}>KRW-ADA</option>
-                            <option value="KRW-DOT" {'selected' if state.market == 'KRW-DOT' else ''}>KRW-DOT</option>
-                            <option value="KRW-LINK" {'selected' if state.market == 'KRW-LINK' else ''}>KRW-LINK</option>
-                            <option value="KRW-LTC" {'selected' if state.market == 'KRW-LTC' else ''}>KRW-LTC</option>
-                            <option value="KRW-BCH" {'selected' if state.market == 'KRW-BCH' else ''}>KRW-BCH</option>
-                            <option value="KRW-EOS" {'selected' if state.market == 'KRW-EOS' else ''}>KRW-EOS</option>
-                            <option value="KRW-TRX" {'selected' if state.market == 'KRW-TRX' else ''}>KRW-TRX</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="order-pct-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            💰 1건당 매수 퍼센트 (%)
-                        </label>
-                        <input 
-                            type="number" 
-                            id="order-pct-input" 
-                            name="order_amount_pct" 
-                            value="{settings.order_amount_pct}"
-                            min="0.1" 
-                            max="100"
-                            step="0.1"
-                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            required
-                        />
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                            💡 보유 원화의 %를 1건당 매수 금액으로 계산<br/>
-                            • 매수: 계산값 &lt; 6,000원이면 6,000원으로 매수<br/>
-                            • 매도: 신호 발생 시 무조건 매도 (포지션 &lt; 5,000원이면 추가 매수 후 즉시 판매) (기본값: 3%)
-                        </p>
-                    </div>
-                    <button 
-                        type="submit" 
-                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-200 shadow-md hover:shadow-lg"
-                    >
-                        Update Settings
-                    </button>
-                </form>
-            </div>
-            
-            <!-- Status Card -->
-            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <button id="status-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
-                    <h2 class="text-xl font-bold text-gray-900 dark:text-white">📊 상태</h2>
-                    <span class="text-2xl" id="status-icon">▼</span>
-                </button>
-                <div class="space-y-3 mt-4" id="status-content" style="display: none;">
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Current Market</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{state.market}</span>
-                    </div>
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Current Strategy</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{state.strategy}</span>
-                    </div>
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">💰 Order Size</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{settings.order_amount_pct}%</span>
-                    </div>
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Last Signal</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{state.last_signal or "N/A"}</span>
-                    </div>
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Last Run</span>
-                        <span class="font-semibold text-gray-900 dark:text-white text-sm">{state.last_run_at or "N/A"}</span>
-                    </div>
-                    {f'<div class="flex justify-between items-center py-2"><span class="text-red-600 dark:text-red-400">Last Error</span><span class="font-semibold text-red-600 dark:text-red-400 text-sm">{state.last_error}</span></div>' if state.last_error else ''}
-                </div>
-            </div>
-        </div>
-
         <!-- Server Control & Account -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Controls Card -->
@@ -972,6 +848,130 @@ def _render_dashboard(
                             <tr><td colspan="9" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">로딩 중...</td></tr>
                 </tbody>
             </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Settings Card -->
+            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+                <button id="settings-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
+                    <h2 class="text-xl font-bold text-gray-900 dark:text-white">⚙️ 설정</h2>
+                    <span class="text-2xl" id="settings-icon">▼</span>
+                </button>
+                <form id="settings-form" method="post" action="/update-settings" class="space-y-4 mt-4" style="display: none;" data-settings-content>
+                    <div>
+                        <label for="strategy-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Strategy
+                        </label>
+                        <select 
+                            id="strategy-select" 
+                            name="strategy" 
+                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            onchange="updateStrategyDescription(this.value)"
+                        >
+                            {''.join([f'''
+                            <option value="{strategy_key}" {'selected' if state.strategy == strategy_key else ''}>
+                                {strategy_info.get(strategy_key, {}).get('name', strategy_key)}
+                            </option>
+                            ''' for strategy_key in AVAILABLE_STRATEGIES])}
+                </select>
+                        <div id="strategy-description" class="mt-2 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                            <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">
+                                <strong>{strategy_info.get(state.strategy, {}).get('name', '알 수 없음')}</strong>
+                            </p>
+                            <p class="text-xs text-gray-500 dark:text-gray-500">
+                                {strategy_info.get(state.strategy, {}).get('description', '설명 없음')}
+                            </p>
+                            <div class="mt-2 flex gap-2">
+                                <span class="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
+                                    리스크: {strategy_info.get(state.strategy, {}).get('risk', 'N/A')}
+                                </span>
+                                <span class="text-xs px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded">
+                                    적합: {strategy_info.get(state.strategy, {}).get('best_for', 'N/A')}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="market-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Market
+                        </label>
+                        <select 
+                            id="market-select" 
+                            name="market" 
+                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                            <option value="KRW-BTC" {'selected' if state.market == 'KRW-BTC' else ''}>KRW-BTC</option>
+                            <option value="KRW-ETH" {'selected' if state.market == 'KRW-ETH' else ''}>KRW-ETH</option>
+                            <option value="KRW-XRP" {'selected' if state.market == 'KRW-XRP' else ''}>KRW-XRP</option>
+                            <option value="KRW-ADA" {'selected' if state.market == 'KRW-ADA' else ''}>KRW-ADA</option>
+                            <option value="KRW-DOT" {'selected' if state.market == 'KRW-DOT' else ''}>KRW-DOT</option>
+                            <option value="KRW-LINK" {'selected' if state.market == 'KRW-LINK' else ''}>KRW-LINK</option>
+                            <option value="KRW-LTC" {'selected' if state.market == 'KRW-LTC' else ''}>KRW-LTC</option>
+                            <option value="KRW-BCH" {'selected' if state.market == 'KRW-BCH' else ''}>KRW-BCH</option>
+                            <option value="KRW-EOS" {'selected' if state.market == 'KRW-EOS' else ''}>KRW-EOS</option>
+                            <option value="KRW-TRX" {'selected' if state.market == 'KRW-TRX' else ''}>KRW-TRX</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="order-pct-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            💰 1건당 매수 퍼센트 (%)
+                        </label>
+                        <input 
+                            type="number" 
+                            id="order-pct-input" 
+                            name="order_amount_pct" 
+                            value="{settings.order_amount_pct}"
+                            min="0.1" 
+                            max="100"
+                            step="0.1"
+                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            required
+                        />
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            💡 보유 원화의 %를 1건당 매수 금액으로 계산<br/>
+                            • 매수: 계산값 &lt; 6,000원이면 6,000원으로 매수<br/>
+                            • 매도: 신호 발생 시 무조건 매도 (포지션 &lt; 5,000원이면 추가 매수 후 즉시 판매) (기본값: 3%)
+                        </p>
+                    </div>
+                    <button 
+                        type="submit" 
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-200 shadow-md hover:shadow-lg"
+                    >
+                        Update Settings
+                    </button>
+                </form>
+            </div>
+            
+            <!-- Status Card -->
+            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+                <button id="status-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
+                    <h2 class="text-xl font-bold text-gray-900 dark:text-white">📊 상태</h2>
+                    <span class="text-2xl" id="status-icon">▼</span>
+                </button>
+                <div class="space-y-3 mt-4" id="status-content" style="display: none;">
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">Current Market</span>
+                        <span class="font-semibold text-gray-900 dark:text-white">{state.market}</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">Current Strategy</span>
+                        <span class="font-semibold text-gray-900 dark:text-white">{state.strategy}</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">💰 Order Size</span>
+                        <span class="font-semibold text-gray-900 dark:text-white">{settings.order_amount_pct}%</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">Last Signal</span>
+                        <span class="font-semibold text-gray-900 dark:text-white">{state.last_signal or "N/A"}</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">Last Run</span>
+                        <span class="font-semibold text-gray-900 dark:text-white text-sm">{state.last_run_at or "N/A"}</span>
+                    </div>
+                    {f'<div class="flex justify-between items-center py-2"><span class="text-red-600 dark:text-red-400">Last Error</span><span class="font-semibold text-red-600 dark:text-red-400 text-sm">{state.last_error}</span></div>' if state.last_error else ''}
                 </div>
             </div>
         </div>
