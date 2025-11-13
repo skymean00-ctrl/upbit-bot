@@ -897,7 +897,7 @@ def _render_dashboard(
             <!-- Performance Analysis (Left) -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">📊 성과 분석</h2>
-                <div id="statistics" class="space-y-2">
+                <div id="statistics" class="space-y-2" style="height: 18em; overflow-y-auto;">
                     <!-- 기본 통계 -->
                     <div class="grid grid-cols-4 gap-3 mb-3">
                         <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
@@ -957,7 +957,7 @@ def _render_dashboard(
             <!-- Trade History (Right) -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
-                <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 20em;">
+                <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 18em;">
                     <table class="w-full text-xs">
                         <thead>
                             <tr class="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
