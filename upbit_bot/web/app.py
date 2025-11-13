@@ -1615,19 +1615,46 @@ def _render_dashboard(
             loadStatistics();
         }}, 30000);
 
-        // Auto-refresh 기능
+        // Auto-refresh 기능 (서버가 실행 중일 때만)
         let refreshCounter = 15;
+        let isServerRunning = false;
         const counterElement = document.getElementById('refresh-counter');
         
-        setInterval(() => {{
-            refreshCounter--;
-            if (counterElement) {{
-                counterElement.textContent = refreshCounter;
+        // 서버 상태 확인
+        async function checkServerStatus() {{
+            try {{
+                const response = await fetch('/status');
+                const data = await response.json();
+                isServerRunning = data.running === true;
+            }} catch (err) {{
+                isServerRunning = false;
             }}
-            if (refreshCounter <= 0) {{
+        }}
+        
+        // 초기 서버 상태 확인
+        checkServerStatus();
+        
+        // 5초마다 서버 상태 확인
+        setInterval(checkServerStatus, 5000);
+        
+        setInterval(() => {{
+            // 서버가 실행 중일 때만 카운터 감소 및 새로고침
+            if (isServerRunning) {{
+                refreshCounter--;
+                if (counterElement) {{
+                    counterElement.textContent = refreshCounter;
+                }}
+                if (refreshCounter <= 0) {{
+                    refreshCounter = 15;
+                    // 페이지 새로고침
+                    window.location.reload();
+                }}
+            }} else {{
+                // 서버가 중지되어 있으면 카운터 리셋
                 refreshCounter = 15;
-                // 페이지 새로고침
-                window.location.reload();
+                if (counterElement) {{
+                    counterElement.textContent = '대기 중...';
+                }}
             }}
         }}, 1000);
 

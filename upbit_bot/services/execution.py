@@ -17,6 +17,9 @@ from .risk import PositionSizer, RiskManager
 
 LOGGER = logging.getLogger(__name__)
 
+# 포트폴리오 관리 설정
+MAX_POSITIONS = 5  # 최대 동시 보유 가능한 코인 개수
+
 
 class ExecutionEngine:
     """Simple polling-based execution engine for a single market."""
@@ -313,8 +316,8 @@ class ExecutionEngine:
             
             # 포트폴리오 체크: 최대 5개 포지션
             if not self.can_open_new_position():
-                # 5개 모두 찼으면 가장 나쁜 포지션 청산
-                LOGGER.info("Portfolio full (5 positions). Liquidating worst position...")
+                # 최대 개수 모두 찼으면 가장 나쁜 포지션 청산
+                LOGGER.info(f"Portfolio full ({MAX_POSITIONS} positions). Liquidating worst position...")
                 liquidate_result = self.liquidate_worst_position()
                 if not liquidate_result.get("success"):
                     LOGGER.warning(f"Failed to liquidate worst position: {liquidate_result.get('error')}")
@@ -786,10 +789,10 @@ class ExecutionEngine:
         """
         새로운 포지션 오픈 가능 여부 판단.
         
-        최대 5개 포지션만 동시 보유 가능
+        최대 MAX_POSITIONS개 포지션만 동시 보유 가능
         """
         portfolio = self.get_portfolio_status()
-        return portfolio.get("total_positions", 0) < 5
+        return portfolio.get("total_positions", 0) < MAX_POSITIONS
     
     def liquidate_worst_position(self) -> dict[str, Any]:
         """
