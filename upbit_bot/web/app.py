@@ -892,36 +892,35 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Statistics (First) -->
+        <!-- Statistics (Full Width) -->
         <div class="mb-8">
             <!-- Performance Analysis -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">📊 성과 분석</h2>
-                <div id="statistics" class="space-y-3">
+                <div id="statistics" class="space-y-2">
                     <!-- 기본 통계 -->
-                    <div class="grid grid-cols-2 gap-4 mb-4">
-                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-3">
+                    <div class="grid grid-cols-4 gap-3 mb-3">
+                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
                             <p class="text-xs text-gray-600 dark:text-gray-400">총 거래</p>
-                            <p class="text-2xl font-bold text-gray-900 dark:text-white" id="stat-total-trades">0</p>
+                            <p class="text-xl font-bold text-gray-900 dark:text-white" id="stat-total-trades">0</p>
                         </div>
-                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-3">
+                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
                             <p class="text-xs text-gray-600 dark:text-gray-400">승률</p>
-                            <p class="text-2xl font-bold text-green-600 dark:text-green-400" id="stat-win-rate">0%</p>
+                            <p class="text-xl font-bold text-green-600 dark:text-green-400" id="stat-win-rate">0%</p>
                         </div>
-                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-3">
+                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
                             <p class="text-xs text-gray-600 dark:text-gray-400">총 수익/손실</p>
-                            <p class="text-2xl font-bold text-gray-900 dark:text-white" id="stat-total-pnl">0 KRW</p>
+                            <p class="text-xl font-bold text-gray-900 dark:text-white" id="stat-total-pnl">0 KRW</p>
                         </div>
-                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-3">
+                        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
                             <p class="text-xs text-gray-600 dark:text-gray-400">평균 수익률</p>
-                            <p class="text-2xl font-bold text-gray-900 dark:text-white" id="stat-avg-profit-pct">0%</p>
+                            <p class="text-xl font-bold text-gray-900 dark:text-white" id="stat-avg-profit-pct">0%</p>
                         </div>
                     </div>
                     
                     <!-- 상세 분석 -->
-                    <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-                        <p class="text-sm font-semibold text-gray-900 dark:text-white mb-3">📈 상세 지표</p>
-                        <div class="grid grid-cols-2 gap-2 text-xs">
+                    <div class="border-t border-gray-200 dark:border-gray-700 pt-2">
+                        <div class="grid grid-cols-4 gap-2 text-xs">
                             <div>
                                 <span class="text-gray-600 dark:text-gray-400">승리 거래</span>
                                 <p class="font-bold text-green-600 dark:text-green-400" id="stat-winning-trades">0</p>
@@ -946,7 +945,7 @@ def _render_dashboard(
                                 <span class="text-gray-600 dark:text-gray-400">최대낙폭 (MDD)</span>
                                 <p class="font-bold text-red-600 dark:text-red-400" id="stat-max-dd">0 KRW</p>
                             </div>
-                            <div class="col-span-2">
+                            <div>
                                 <span class="text-gray-600 dark:text-gray-400">Sharpe Ratio</span>
                                 <p class="font-bold text-gray-900 dark:text-white" id="stat-sharpe">0.00</p>
                             </div>
@@ -956,12 +955,12 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Trade History (Full Width) -->
+        <!-- Trade History (Compact - Asset Snapshot Height) -->
         <div class="mb-8">
             <!-- Trade History -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
-                <div id="trade-history" class="overflow-x-auto">
+                <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 20em;">
                     <table class="w-full text-xs">
                         <thead>
                             <tr class="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
