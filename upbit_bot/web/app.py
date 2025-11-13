@@ -205,6 +205,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         controller.stop()
         return RedirectResponse(url="/", status_code=303)
 
+    @app.post("/force-exit")
+    async def force_exit() -> JSONResponse:
+        """강제 탈출: 모든 거래 가능한 코인을 시장가로 매도."""
+        try:
+            result = controller.engine.force_exit_all()
+            return JSONResponse({
+                "success": True,
+                "result": result,
+            })
+        except Exception as e:  # noqa: BLE001
+            LOGGER.error(f"Force exit error: {e}")
+            return JSONResponse({
+                "success": False,
+                "error": str(e),
+            }, status_code=500)
+
     @app.get("/status")
     async def status() -> JSONResponse:
         return JSONResponse(controller.get_state().as_dict())
@@ -681,6 +697,12 @@ def _render_dashboard(
                             <span>서버 중지</span>
                         </button>
             </form>
+            
+            <!-- 강제 탈출 버튼 -->
+            <button id="force-exit-btn" class="w-full bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-bold py-3 px-6 rounded-lg transition duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2">
+                <span>🚪</span>
+                <span>강제 탈출 (모든 코인 매도)</span>
+            </button>
                     
                     <!-- 추가 정보 -->
                     <div class="grid grid-cols-2 gap-2 pt-4 border-t border-gray-200 dark:border-gray-700 text-xs">
@@ -1054,6 +1076,51 @@ def _render_dashboard(
                 }})
                 .catch(err => console.error('Failed to fetch status:', err));
         }}, 3000);  // 3초마다 상태 업데이트
+        
+        // 강제 탈출 버튼 핸들러
+        const forceExitBtn = document.getElementById('force-exit-btn');
+        if (forceExitBtn) {{
+            forceExitBtn.addEventListener('click', async () => {{
+                // 확인 메시지
+                const confirmed = confirm(
+                    '⚠️ 경고!\\n\\n' +
+                    '보유한 모든 거래 가능 코인을 시장가로 매도합니다.\\n' +
+                    '이 작업은 되돌릴 수 없습니다.\\n\\n' +
+                    '계속하시겠습니까?'
+                );
+                
+                if (!confirmed) return;
+                
+                try {{
+                    forceExitBtn.disabled = true;
+                    forceExitBtn.textContent = '🔄 실행 중...';
+                    
+                    const response = await fetch('/force-exit', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }}
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        alert(
+                            '✅ 강제 탈출 완료!\\n\\n' +
+                            data.result.message + '\\n' +
+                            (data.result.errors.length > 0 
+                                ? '\\n⚠️ 에러:\\n' + data.result.errors.join('\\n')
+                                : '')
+                        );
+                    }} else {{
+                        alert('❌ 강제 탈출 실패:\\n' + (data.error || '알 수 없는 에러'));
+                    }}
+                }} catch (err) {{
+                    alert('❌ 요청 실패: ' + err.message);
+                }} finally {{
+                    forceExitBtn.disabled = false;
+                    forceExitBtn.innerHTML = '<span>🚪</span><span>강제 탈출 (모든 코인 매도)</span>';
+                }}
+            }});
+        }}
     </script>
 </body>
 </html>"""

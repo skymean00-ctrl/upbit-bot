@@ -6,6 +6,7 @@ import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from threading import Event, Thread
+from typing import Any
 
 from upbit_bot.core import UpbitClient
 from upbit_bot.data.trade_history import TradeHistoryStore
@@ -136,22 +137,136 @@ class ExecutionEngine:
         
         return final_amount
     
-    def _can_sell(self, position_value: float) -> bool:
+    def _try_escape_with_additional_buy(self, position_value: float, last_candle: Candle) -> bool:
+        """
+        5,000원 이하 포지션 탈출 시도.
+        
+        로직:
+        1. 현재 포지션 가치가 5,000원 이하면
+        2. 5,000원을 추가로 매수해서 평단가 낮춤
+        3. 그 이후 매도 가능한 상태가 되도록
+        
+        성공 시 True, 실패 시 False
+        """
+        MIN_SELL_AMOUNT = 5000.0
+        
+        if position_value > MIN_SELL_AMOUNT:
+            return True  # 이미 매도 가능
+        
+        try:
+            # 현재 KRW 잔액 확인
+            account = self.client.get_accounts()
+            krw_account = next((a for a in account if a["currency"] == "KRW"), None)
+            krw_balance = float(krw_account["balance"]) if krw_account else 0.0
+            
+            # 5,000원 이상이 필요
+            if krw_balance < MIN_SELL_AMOUNT:
+                LOGGER.warning(
+                    f"Cannot escape: position {position_value:.0f} KRW + balance {krw_balance:.0f} KRW < {MIN_SELL_AMOUNT:.0f} KRW"
+                )
+                return False
+            
+            # 5,000원으로 추가 매수
+            buy_amount = MIN_SELL_AMOUNT
+            buy_quantity = buy_amount / last_candle.close
+            
+            LOGGER.info(
+                f"Attempting escape for {self.market}: buying {buy_quantity:.8f} @ {last_candle.close} = {buy_amount:.0f} KRW"
+            )
+            
+            if self.dry_run:
+                # 드라이런: 시뮬레이션
+                new_total_quantity = (self.position_volume or 0.0) + buy_quantity
+                new_total_cost = (self.position_volume or 0.0) * self.position_price + buy_amount
+                new_avg_price = new_total_cost / new_total_quantity if new_total_quantity > 0 else 0
+                
+                self.position_volume = new_total_quantity
+                self.position_price = new_avg_price
+                
+                LOGGER.info(
+                    f"Dry-run escape: new avg price {new_avg_price:.0f} KRW, new position {new_total_quantity:.8f}"
+                )
+                
+                # 거래 기록
+                self.trade_history_store.save_trade(
+                    market=self.market,
+                    strategy=self.strategy.name,
+                    signal="escape_buy",
+                    side="buy",
+                    price=last_candle.close,
+                    volume=buy_quantity,
+                    amount=buy_amount,
+                )
+                
+                return True
+            else:
+                # 라이브: 실제 주문
+                order = self.client.place_order(
+                    market=self.market,
+                    side="bid",
+                    amount=str(int(buy_amount)),
+                    ord_type="market",
+                )
+                
+                if order:
+                    order_id = order.get("uuid")
+                    # 주문 결과 반영
+                    actual_volume = float(order.get("executed_volume", buy_quantity))
+                    actual_cost = float(order.get("paid_fee", 0)) + buy_amount
+                    
+                    new_total_quantity = (self.position_volume or 0.0) + actual_volume
+                    new_total_cost = (self.position_volume or 0.0) * self.position_price + actual_cost
+                    new_avg_price = new_total_cost / new_total_quantity if new_total_quantity > 0 else 0
+                    
+                    self.position_volume = new_total_quantity
+                    self.position_price = new_avg_price
+                    
+                    LOGGER.info(
+                        f"Live escape executed: {order_id}, new avg price {new_avg_price:.0f}, new position {new_total_quantity:.8f}"
+                    )
+                    
+                    # 거래 기록
+                    self.trade_history_store.save_trade(
+                        market=self.market,
+                        strategy=self.strategy.name,
+                        signal="escape_buy",
+                        side="buy",
+                        price=last_candle.close,
+                        volume=actual_volume,
+                        amount=actual_cost,
+                    )
+                    
+                    return True
+                else:
+                    LOGGER.error("Escape buy order failed")
+                    return False
+                    
+        except Exception as e:
+            LOGGER.error(f"Escape attempt failed: {e}")
+            return False
+    
+    def _can_sell(self, position_value: float, last_candle: Candle | None = None) -> bool:
         """
         매도 가능 여부 판단.
         
         매도는 포지션 가치가 5,000원 초과일 때만 가능
-        5,000원 이하면 수수료로 인한 손실 가능성이 있어 매도하지 않음
+        5,000원 이하면 탈출 시도
         """
         MIN_SELL_AMOUNT = 5000.0
-        can_sell = position_value > MIN_SELL_AMOUNT
         
-        if not can_sell:
-            LOGGER.warning(
-                f"Sell skipped: position value {position_value:.0f} KRW ≤ {MIN_SELL_AMOUNT:.0f} KRW"
-            )
+        if position_value > MIN_SELL_AMOUNT:
+            return True  # 매도 가능
         
-        return can_sell
+        # 5,000원 이하면 탈출 시도
+        if last_candle:
+            if self._try_escape_with_additional_buy(position_value, last_candle):
+                LOGGER.info(f"Escape successful, can now sell")
+                return True
+        
+        LOGGER.warning(
+            f"Cannot sell: position value {position_value:.0f} KRW ≤ {MIN_SELL_AMOUNT:.0f} KRW, escape failed"
+        )
+        return False
 
     def _notify(self, message: str, **kwargs) -> None:
         for notifier in self.notifiers:
@@ -294,11 +409,11 @@ class ExecutionEngine:
             LOGGER.debug("No open position for %s; ignoring SELL signal.", self.market)
             return None
 
-        # 매도 가능 여부 확인 (5,000원 초과만 가능)
+        # 매도 가능 여부 확인 (5,000원 이하면 탈출 시도)
         sell_amount = (self.position_volume or 0.0) * last_candle.close
-        if not self._can_sell(sell_amount):
+        if not self._can_sell(sell_amount, last_candle):
             LOGGER.info(
-                "SELL signal ignored: position value %.0f KRW is below minimum (5,000 KRW)",
+                "SELL signal skipped: position value %.0f KRW, unable to sell or escape",
                 sell_amount
             )
             return None
@@ -469,3 +584,92 @@ class ExecutionEngine:
             and self._worker.is_alive()
             and not self._stop_event.is_set()
         )
+
+    def force_exit_all(self) -> dict[str, Any]:
+        """
+        강제 탈출: 모든 거래 가능한 코인을 시장가로 매도.
+        
+        작동:
+        1. 현재 보유한 모든 코인 조회
+        2. 거래 가능한 코인만 필터링
+        3. 각 코인을 시장가 매도
+        4. 결과 반환
+        """
+        results = {
+            "status": "force_exit",
+            "executed_at": datetime.now(UTC).isoformat(),
+            "sells": [],
+            "errors": [],
+        }
+        
+        try:
+            # 현재 계정 정보 조회
+            accounts = self.client.get_accounts()
+            
+            # KRW 제외하고 0 이상의 잔액 있는 코인만 필터링
+            coins_to_sell = [
+                a for a in accounts
+                if a["currency"] != "KRW" and float(a.get("balance", 0)) > 0
+            ]
+            
+            if not coins_to_sell:
+                results["message"] = "No coins to sell"
+                LOGGER.info("Force exit: No coins to sell")
+                return results
+            
+            # 각 코인 매도
+            for coin_account in coins_to_sell:
+                currency = coin_account["currency"]
+                balance = float(coin_account["balance"])
+                market = f"KRW-{currency}"
+                
+                try:
+                    # 현재 시세 조회
+                    ticker = self.client.get_ticker(market)
+                    if not ticker:
+                        results["errors"].append(f"No ticker for {market}")
+                        continue
+                    
+                    current_price = float(ticker.get("trade_price", 0))
+                    sell_amount = balance * current_price
+                    
+                    # 최소 금액 체크
+                    if sell_amount < 5000:
+                        results["errors"].append(
+                            f"{market}: 판매금액 {sell_amount:.0f}원 < 5,000원 (스킵)"
+                        )
+                        continue
+                    
+                    # 시장가 매도
+                    order = self.client.place_order(
+                        market=market,
+                        side="ask",  # 매도
+                        volume=str(balance),
+                        ord_type="market",
+                    )
+                    
+                    results["sells"].append({
+                        "market": market,
+                        "balance": balance,
+                        "price": current_price,
+                        "amount": sell_amount,
+                        "order_id": order.get("uuid"),
+                        "status": "success",
+                    })
+                    
+                    LOGGER.info(
+                        f"Force exit SELL: {market} {balance} @ {current_price} = {sell_amount:.0f}원"
+                    )
+                    
+                except Exception as e:
+                    results["errors"].append(f"{market}: {str(e)}")
+                    LOGGER.error(f"Force exit error for {market}: {e}")
+            
+            results["message"] = f"강제 탈출 완료: {len(results['sells'])}개 코인 매도"
+            
+        except Exception as e:
+            results["status"] = "error"
+            results["error"] = str(e)
+            LOGGER.error(f"Force exit failed: {e}")
+        
+        return results
