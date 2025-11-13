@@ -545,6 +545,19 @@ def _render_dashboard(
             </div>
         </div>
 
+        <!-- Ollama Connection Status Alert -->
+        <div id="ollama-alert" class="hidden mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+            <div class="flex items-start">
+                <svg class="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 mr-3" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+                </svg>
+                <div>
+                    <h3 class="text-sm font-semibold text-red-800 dark:text-red-200 mb-1">⚠️ Ollama 연결 끊김</h3>
+                    <p class="text-sm text-red-700 dark:text-red-300">AI 시장 분석 서비스를 사용할 수 없습니다. 노트북의 Ollama 서버 상태를 확인해주세요. (IP: 100.98.189.30:11434)</p>
+                </div>
+            </div>
+        </div>
+
         <!-- Balance Cards -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
@@ -596,8 +609,11 @@ def _render_dashboard(
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Settings Card -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">Settings</h2>
-                <form id="settings-form" method="post" action="/update-settings" class="space-y-4">
+                <button id="settings-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
+                    <h2 class="text-xl font-bold text-gray-900 dark:text-white">⚙️ 설정</h2>
+                    <span class="text-2xl" id="settings-icon">▼</span>
+                </button>
+                <form id="settings-form" method="post" action="/update-settings" class="space-y-4 mt-4" style="display: none;" data-settings-content>
                     <div>
                         <label for="strategy-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             Strategy
@@ -684,8 +700,11 @@ def _render_dashboard(
             
             <!-- Status Card -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">Status</h2>
-                <div class="space-y-3">
+                <button id="status-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
+                    <h2 class="text-xl font-bold text-gray-900 dark:text-white">📊 상태</h2>
+                    <span class="text-2xl" id="status-icon">▼</span>
+                </button>
+                <div class="space-y-3 mt-4" id="status-content">
                     <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
                         <span class="text-gray-600 dark:text-gray-400">Current Market</span>
                         <span class="font-semibold text-gray-900 dark:text-white">{state.market}</span>
@@ -993,6 +1012,52 @@ def _render_dashboard(
         setInterval(updateAccountValues, 10000);
         // 초기 로드
         updateAccountValues();
+        
+        // Settings & Status 드롭다운 토글
+        document.getElementById('settings-toggle').addEventListener('click', () => {{
+            const form = document.getElementById('settings-form');
+            const icon = document.getElementById('settings-icon');
+            if (form.style.display === 'none') {{
+                form.style.display = 'block';
+                icon.textContent = '▲';
+            }} else {{
+                form.style.display = 'none';
+                icon.textContent = '▼';
+            }}
+        }});
+        
+        document.getElementById('status-toggle').addEventListener('click', () => {{
+            const content = document.getElementById('status-content');
+            const icon = document.getElementById('status-icon');
+            if (content.style.display === 'none') {{
+                content.style.display = 'block';
+                icon.textContent = '▲';
+            }} else {{
+                content.style.display = 'none';
+                icon.textContent = '▼';
+            }}
+        }});
+        
+        // Ollama 연결 상태 모니터링 (30초마다)
+        async function checkOllamaConnection() {{
+            try {{
+                const response = await fetch('http://100.98.189.30:11434/api/tags', {{ 
+                    method: 'GET',
+                    mode: 'no-cors'
+                }});
+                const alert = document.getElementById('ollama-alert');
+                alert.classList.add('hidden');
+            }} catch (err) {{
+                const alert = document.getElementById('ollama-alert');
+                alert.classList.remove('hidden');
+                console.warn('Ollama connection failed:', err);
+            }}
+        }}
+        
+        // 초기 체크
+        checkOllamaConnection();
+        // 30초마다 체크
+        setInterval(checkOllamaConnection, 30000);
         
         // 차트 토글 및 렌더링
         async function toggleChart(currency, row) {{
