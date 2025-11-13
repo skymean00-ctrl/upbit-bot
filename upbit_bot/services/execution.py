@@ -139,14 +139,23 @@ class ExecutionEngine:
     
     def _try_escape_with_additional_buy(self, position_value: float, last_candle: Candle) -> bool:
         """
-        5,000원 이하 포지션 탈출 시도.
+        저가 포지션 탈출 (추가 매수 후 즉시 매도).
         
-        로직:
-        1. 현재 포지션 가치가 5,000원 이하면
-        2. 5,000원을 추가로 매수해서 평단가 낮춤
-        3. 그 이후 매도 가능한 상태가 되도록
+        시나리오:
+        - 현재 포지션 가치: 5,000원 이하
+        - 매도 신호 발생
         
-        성공 시 True, 실패 시 False
+        탈출 프로세스:
+        1. 5,000원을 시장가로 추가 매수
+        2. 평단가 하락으로 수익성 개선
+        3. 바로 전체 물량 매도
+        
+        목표:
+        - 저가 물량 정리
+        - 손실 최소화
+        - 마진콜 방지
+        
+        반환값: 탈출 성공(True) / 실패(False)
         """
         MIN_SELL_AMOUNT = 5000.0
         
@@ -247,24 +256,32 @@ class ExecutionEngine:
     
     def _can_sell(self, position_value: float, last_candle: Candle | None = None) -> bool:
         """
-        매도 가능 여부 판단.
+        매도 처리 로직.
         
-        매도는 포지션 가치가 5,000원 초과일 때만 가능
-        5,000원 이하면 탈출 시도
+        매도 신호 들어올 때:
+        1. 포지션 가치 > 5,000원: 바로 매도 ✅
+        2. 포지션 가치 ≤ 5,000원: 
+           - 5,000원 추가 매수
+           - 평단가 하락
+           - 즉시 매도 ✅
+        
+        탈출 불가능한 경우만 False 반환
         """
         MIN_SELL_AMOUNT = 5000.0
         
         if position_value > MIN_SELL_AMOUNT:
-            return True  # 매도 가능
+            # 포지션 가치 충분 → 바로 매도
+            return True
         
-        # 5,000원 이하면 탈출 시도
+        # 5,000원 이하 → 탈출 시도 (추가 매수 후 매도)
         if last_candle:
             if self._try_escape_with_additional_buy(position_value, last_candle):
-                LOGGER.info(f"Escape successful, can now sell")
+                LOGGER.info("Escape with additional buy successful, proceeding with sell")
                 return True
         
         LOGGER.warning(
-            f"Cannot sell: position value {position_value:.0f} KRW ≤ {MIN_SELL_AMOUNT:.0f} KRW, escape failed"
+            f"Cannot sell: position value {position_value:.0f} KRW ≤ {MIN_SELL_AMOUNT:.0f} KRW, "
+            f"escape failed (insufficient balance or data)"
         )
         return False
 
@@ -409,11 +426,11 @@ class ExecutionEngine:
             LOGGER.debug("No open position for %s; ignoring SELL signal.", self.market)
             return None
 
-        # 매도 가능 여부 확인 (5,000원 이하면 탈출 시도)
+        # 매도 처리 (신호 발생 시 무조건 매도, 필요시 추가 매수)
         sell_amount = (self.position_volume or 0.0) * last_candle.close
         if not self._can_sell(sell_amount, last_candle):
             LOGGER.info(
-                "SELL signal skipped: position value %.0f KRW, unable to sell or escape",
+                "SELL signal failed: position value %.0f KRW, unable to execute (insufficient balance or data)",
                 sell_amount
             )
             return None
