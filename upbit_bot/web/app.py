@@ -962,18 +962,22 @@ def _render_dashboard(
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
                 <div id="trade-history" class="overflow-x-auto">
-                    <table class="w-full text-sm">
+                    <table class="w-full text-xs">
                         <thead>
-                            <tr class="border-b border-gray-200 dark:border-gray-700">
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">시간</th>
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">전략</th>
-                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">신호</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">가격</th>
-                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300 text-xs">수량</th>
+                            <tr class="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
+                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">시간</th>
+                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">코인</th>
+                                <th class="text-left py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">전략</th>
+                                <th class="text-center py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">신호</th>
+                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">가격</th>
+                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">수량</th>
+                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">총액</th>
+                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">수익/손실</th>
+                                <th class="text-right py-2 px-2 font-semibold text-gray-700 dark:text-gray-300">수익률 (%)</th>
                             </tr>
                         </thead>
                         <tbody id="trade-history-body">
-                            <tr><td colspan="5" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">로딩 중...</td></tr>
+                            <tr><td colspan="9" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">로딩 중...</td></tr>
                 </tbody>
             </table>
                 </div>
@@ -1350,28 +1354,42 @@ def _render_dashboard(
         // 거래 내역 로드
         async function loadTradeHistory() {{
             try {{
-                const response = await fetch('/trades?limit=10');
+                const response = await fetch('/trades?limit=100');
                 const data = await response.json();
                 const tbody = document.getElementById('trade-history-body');
                 
                 if (data.trades && data.trades.length > 0) {{
                     tbody.innerHTML = data.trades.map(trade => {{
                         const date = new Date(trade.timestamp);
-                        const timeStr = date.toLocaleString('ko-KR', {{ hour: '2-digit', minute: '2-digit' }});
+                        const timeStr = date.toLocaleString('ko-KR', {{ year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }});
                         const strategyName = STRATEGY_INFO[trade.strategy]?.name || trade.strategy;
                         const sideColor = trade.side === 'buy' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
+                        const sideBg = trade.side === 'buy' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20';
+                        
+                        const price = trade.price || 0;
+                        const volume = trade.volume || 0;
+                        const totalAmount = price * volume;
+                        
+                        const pnl = trade.pnl || 0;
+                        const pnlColor = pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
+                        const pnlPct = trade.pnl_pct || 0;
+                        
                         return `
-                            <tr class="border-b border-gray-100 dark:border-gray-700">
+                            <tr class="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition ${{sideBg}}">
                                 <td class="py-2 px-2 text-xs text-gray-600 dark:text-gray-400">${{timeStr}}</td>
+                                <td class="py-2 px-2 text-xs font-semibold text-gray-900 dark:text-white">${{trade.currency || '-'}}</td>
                                 <td class="py-2 px-2 text-xs text-gray-900 dark:text-white">${{strategyName}}</td>
-                                <td class="py-2 px-2 text-xs ${{sideColor}}">${{trade.side === 'buy' ? '매수' : '매도'}}</td>
-                                <td class="py-2 px-2 text-xs text-right text-gray-900 dark:text-white">${{trade.price ? trade.price.toLocaleString() : '-'}}</td>
-                                <td class="py-2 px-2 text-xs text-right text-gray-600 dark:text-gray-400">${{trade.volume ? trade.volume.toFixed(4) : '-'}}</td>
+                                <td class="py-2 px-2 text-xs text-center font-semibold ${{sideColor}}">${{trade.side === 'buy' ? '🟢 매수' : '🔴 매도'}}</td>
+                                <td class="py-2 px-2 text-xs text-right text-gray-900 dark:text-white">${{price.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }})}}</td>
+                                <td class="py-2 px-2 text-xs text-right text-gray-600 dark:text-gray-400">${{volume.toFixed(4)}}</td>
+                                <td class="py-2 px-2 text-xs text-right font-semibold text-gray-900 dark:text-white">${{totalAmount.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }})}}</td>
+                                <td class="py-2 px-2 text-xs text-right font-semibold ${{pnlColor}}">${{pnl.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }})}}</td>
+                                <td class="py-2 px-2 text-xs text-right font-semibold ${{pnlColor}}">${{pnlPct.toFixed(2)}}%</td>
                             </tr>
                         `;
                     }}).join('');
                 }} else {{
-                    tbody.innerHTML = '<tr><td colspan="5" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">거래 내역이 없습니다.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">거래 내역이 없습니다.</td></tr>';
                 }}
             }} catch (error) {{
                 console.error('Failed to load trade history:', error);
