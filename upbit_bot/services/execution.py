@@ -99,7 +99,7 @@ class ExecutionEngine:
         1. position_sizer가 있으면 사용
         2. 아니면 현재 KRW 잔액의 order_amount_pct 사용
         3. 둘 다 없으면 order_amount 사용 (후속 호환성)
-        4. 최종 금액은 최소 6,000 KRW 이상
+        4. 최종 금액은 최소 6,000 KRW 이상 (손실 탈출을 위한 충분한 금액)
         
         계산:
         - 계산된 금액 ≥ 6,000 KRW: 설정된 퍼센트 사용
@@ -126,7 +126,7 @@ class ExecutionEngine:
                 else:
                     raise ValueError("Cannot determine order amount")
         
-        MIN_ORDER_AMOUNT = 6000.0  # 최소 주문 금액: 6,000 KRW
+        MIN_ORDER_AMOUNT = 6000.0  # 최소 주문 금액: 6,000 KRW (손실 탈출용)
         final_amount = max(stake, MIN_ORDER_AMOUNT)
         
         if final_amount == MIN_ORDER_AMOUNT and stake < MIN_ORDER_AMOUNT:
@@ -135,6 +135,23 @@ class ExecutionEngine:
             )
         
         return final_amount
+    
+    def _can_sell(self, position_value: float) -> bool:
+        """
+        매도 가능 여부 판단.
+        
+        매도는 포지션 가치가 5,000원 초과일 때만 가능
+        5,000원 이하면 수수료로 인한 손실 가능성이 있어 매도하지 않음
+        """
+        MIN_SELL_AMOUNT = 5000.0
+        can_sell = position_value > MIN_SELL_AMOUNT
+        
+        if not can_sell:
+            LOGGER.warning(
+                f"Sell skipped: position value {position_value:.0f} KRW ≤ {MIN_SELL_AMOUNT:.0f} KRW"
+            )
+        
+        return can_sell
 
     def _notify(self, message: str, **kwargs) -> None:
         for notifier in self.notifiers:
@@ -275,6 +292,15 @@ class ExecutionEngine:
 
         if self.position_price is None:
             LOGGER.debug("No open position for %s; ignoring SELL signal.", self.market)
+            return None
+
+        # 매도 가능 여부 확인 (5,000원 초과만 가능)
+        sell_amount = (self.position_volume or 0.0) * last_candle.close
+        if not self._can_sell(sell_amount):
+            LOGGER.info(
+                "SELL signal ignored: position value %.0f KRW is below minimum (5,000 KRW)",
+                sell_amount
+            )
             return None
 
         pnl_pct = (
