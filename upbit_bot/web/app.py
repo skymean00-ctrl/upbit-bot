@@ -459,7 +459,18 @@ def _render_dashboard(
         # 코인 정보 추가
         crypto_value = balance * current_price
         total_crypto_value += crypto_value
-        entry_with_value = {**entry, "current_price": current_price, "crypto_value": crypto_value}
+        
+        # 구매 금액 계산
+        avg_buy_price = float(entry.get("avg_buy_price", 0.0))
+        purchase_amount = balance * avg_buy_price
+        
+        entry_with_value = {
+            **entry, 
+            "current_price": current_price, 
+            "crypto_value": crypto_value,
+            "purchase_amount": purchase_amount,
+            "avg_buy_price": avg_buy_price
+        }
         tradable_accounts.append(entry_with_value)
         LOGGER.info(f"Added {currency}: balance={balance}, price={current_price}, value={crypto_value}")
     
@@ -788,8 +799,10 @@ def _render_dashboard(
                             <tr class="border-b border-gray-200 dark:border-gray-700">
                                 <th class="text-left py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Currency</th>
                                 <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Balance</th>
+                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Avg Price</th>
+                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Purchase (KRW)</th>
                                 <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Current Price</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Valuation (KRW)</th>
+                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Current Value (KRW)</th>
                             </tr>
                 </thead>
                 <tbody>
@@ -797,18 +810,20 @@ def _render_dashboard(
                             <tr class="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition" onclick="toggleChart('{entry.get('currency', '?')}', this)">
                                 <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')} <span class="text-xs text-gray-400 ml-1">📊</span></td>
                                 <td class="py-3 px-4 text-right text-gray-900 dark:text-white">{float(entry.get('balance', 0)):,.8f}</td>
+                                <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('avg_buy_price', 0)):,.0f}" if entry.get('avg_buy_price') and float(entry.get('avg_buy_price', 0)) > 0 else '-'}</td>
+                                <td class="py-3 px-4 text-right font-medium text-blue-600 dark:text-blue-400">{f"{float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('purchase_amount') else '-'}</td>
                                 <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('current_price', 0)):,.0f}" if entry.get('current_price') and float(entry.get('current_price', 0)) > 0 else '-'}</td>
                                 <td class="py-3 px-4 text-right font-medium text-green-600 dark:text-green-400">{f"{float(entry.get('crypto_value', 0)):,.0f}" if entry.get('crypto_value') else '-'}</td>
                             </tr>
                             <tr id="chart-row-{entry.get('currency', '?')}" class="hidden">
-                                <td colspan="4" class="py-4 px-4">
+                                <td colspan="6" class="py-4 px-4">
                                     <div id="chart-container-{entry.get('currency', '?')}" class="w-full h-64 bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
                                         <div class="flex items-center justify-center h-full text-gray-500">
                                             <span>📈 차트 로딩 중...</span>
                                         </div>
                                     </div>
                                 </td>
-                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="4" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">보유한 거래 가능한 코인이 없습니다</td></tr>'}
+                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="6" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">보유한 거래 가능한 코인이 없습니다</td></tr>'}
                         </tbody>
                     </table>
                 </div>
