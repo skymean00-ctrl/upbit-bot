@@ -777,7 +777,7 @@ def _render_dashboard(
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <!-- Account Snapshot -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">Account Snapshot</h2>
+                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">💼 자산 현황</h2>
                 {f'''
                 <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
                     <div class="flex items-start">
@@ -797,12 +797,12 @@ def _render_dashboard(
                     <table class="w-full text-sm">
                 <thead>
                             <tr class="border-b border-gray-200 dark:border-gray-700">
-                                <th class="text-left py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Currency</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Balance</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Avg Price</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Purchase (KRW)</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Current Price</th>
-                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Current Value (KRW)</th>
+                                <th class="text-left py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">코인</th>
+                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">보유량</th>
+                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">매수가</th>
+                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">구매금액 (원)</th>
+                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">현재가</th>
+                                <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">현재가치 (원)</th>
                             </tr>
                 </thead>
                 <tbody>
@@ -823,7 +823,7 @@ def _render_dashboard(
                                         </div>
                                     </div>
                                 </td>
-                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="6" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">보유한 거래 가능한 코인이 없습니다</td></tr>'}
+                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="6" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">거래 가능한 코인이 없습니다</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -831,12 +831,12 @@ def _render_dashboard(
 
             <!-- Latest Order -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">Latest Order</h2>
+                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">🔔 최근 주문</h2>
                 {f'''
                 <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 overflow-x-auto">
                     <pre class="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{last_order_json}</pre>
                 </div>
-                ''' if last_order_json else '<div class="text-center py-8 text-gray-500 dark:text-gray-400">No orders yet</div>'}
+                ''' if last_order_json else '<div class="text-center py-8 text-gray-500 dark:text-gray-400">주문 없음</div>'}
             </div>
         </div>
 
@@ -935,6 +935,64 @@ def _render_dashboard(
     <script>
         const STRATEGY_INFO = {json.dumps({k: v for k, v in strategy_info.items()}, ensure_ascii=False)};
         let currentChartInstance = null;
+        
+        // 실시간 현재가 업데이트
+        async function updateAccountValues() {{
+            try {{
+                const table = document.querySelector('table tbody');
+                if (!table) return;
+                
+                const rows = table.querySelectorAll('tr');
+                for (const row of rows) {{
+                    // 차트 행 제외
+                    if (row.id && row.id.startsWith('chart-row-')) continue;
+                    
+                    const cells = row.querySelectorAll('td');
+                    if (cells.length < 6) continue;
+                    
+                    // 코인명 추출
+                    const coinText = cells[0].textContent.trim().split(' ')[0];
+                    if (!coinText || coinText === '보유한') continue;
+                    
+                    try {{
+                        // 현재가 조회
+                        const response = await fetch(`/chart/${{coinText}}?candles=1`);
+                        const data = await response.json();
+                        
+                        if (data.data && data.data.length > 0) {{
+                            const balance = parseFloat(cells[1].textContent);
+                            const currentPrice = data.data[data.data.length - 1].close;
+                            const currentValue = balance * currentPrice;
+                            
+                            // 현재가 업데이트
+                            cells[4].textContent = currentPrice.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                            
+                            // 현재가치 업데이트
+                            cells[5].textContent = currentValue.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                            
+                            // 초록색 또는 빨강색으로 표시
+                            const purchaseValue = parseFloat(cells[3].textContent);
+                            if (currentValue > purchaseValue) {{
+                                cells[5].className = 'py-3 px-4 text-right font-medium text-green-600 dark:text-green-400';
+                            }} else if (currentValue < purchaseValue) {{
+                                cells[5].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
+                            }} else {{
+                                cells[5].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
+                            }}
+                        }}
+                    }} catch (err) {{
+                        console.debug(`Price update failed for ${{coinText}}:`, err);
+                    }}
+                }}
+            }} catch (err) {{
+                console.error('Account values update error:', err);
+            }}
+        }}
+        
+        // 10초마다 실시간 업데이트
+        setInterval(updateAccountValues, 10000);
+        // 초기 로드
+        updateAccountValues();
         
         // 차트 토글 및 렌더링
         async function toggleChart(currency, row) {{
