@@ -570,14 +570,113 @@ class ExecutionEngine:
         self.position_volume = None
         return response
 
+    def _analyze_multiple_markets(self) -> tuple[str | None, StrategySignal, list[Candle]]:
+        """
+        AI 전략일 때 여러 코인을 분석하여 최적의 코인 선택.
+        
+        Returns:
+            (선택된 market, signal, candles)
+        """
+        if self.strategy.name != "ai_market_analyzer":
+            # AI 전략이 아니면 기존 방식
+            candles = self._fetch_candles()
+            signal = self.strategy.on_candles(candles)
+            return self.market, signal, candles
+        
+        # AI 전략: 여러 코인 분석
+        try:
+            # 거래 가능한 코인 목록 가져오기
+            markets = self.client.get_krw_markets()
+            LOGGER.info(f"Analyzing {len(markets)} markets for AI strategy...")
+            
+            best_market: str | None = None
+            best_signal: StrategySignal = StrategySignal.HOLD
+            best_candles: list[Candle] = []
+            best_confidence = 0.0
+            
+            # 이미 포지션이 있는 코인은 제외
+            portfolio = self.get_portfolio_status()
+            open_markets = {pos.get("market") for pos in portfolio.get("open_positions", [])}
+            
+            # 각 코인 분석 (최대 20개만 분석하여 시간 절약)
+            markets_to_analyze = [m for m in markets[:20] if m not in open_markets]
+            
+            for market in markets_to_analyze:
+                try:
+                    # 캔들 데이터 가져오기
+                    raw = self.client.get_candles(market, unit=self.candle_unit, count=self.candle_count)
+                    if not raw:
+                        continue
+                    
+                    candles_list = [
+                        Candle(
+                            timestamp=int(item["timestamp"]),
+                            open=float(item["opening_price"]),
+                            high=float(item["high_price"]),
+                            low=float(item["low_price"]),
+                            close=float(item["trade_price"]),
+                            volume=float(item["candle_acc_trade_volume"]),
+                        )
+                        for item in reversed(raw)
+                    ]
+                    
+                    if len(candles_list) < 5:
+                        continue
+                    
+                    # AI 분석 실행
+                    signal = self.strategy.on_candles(candles_list)
+                    
+                    # 분석 결과 가져오기
+                    if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
+                        confidence = self.strategy.last_analysis.get('confidence', 0.0)
+                        
+                        # BUY 신호이고 신뢰도가 더 높으면 업데이트
+                        if signal == StrategySignal.BUY and confidence > best_confidence:
+                            best_market = market
+                            best_signal = signal
+                            best_candles = candles_list
+                            best_confidence = confidence
+                            
+                            LOGGER.info(
+                                f"Better signal found: {market} {signal.value} "
+                                f"(confidence: {confidence:.2%})"
+                            )
+                
+                except Exception as e:
+                    LOGGER.debug(f"Failed to analyze {market}: {e}")
+                    continue
+            
+            if best_market:
+                LOGGER.info(
+                    f"Selected market: {best_market} with {best_signal.value} "
+                    f"(confidence: {best_confidence:.2%})"
+                )
+                # 선택된 코인으로 market 업데이트
+                self.market = best_market
+                return best_market, best_signal, best_candles
+            else:
+                # 신호가 없으면 기존 market 유지
+                candles = self._fetch_candles()
+                signal = self.strategy.on_candles(candles)
+                return self.market, signal, candles
+                
+        except Exception as e:
+            LOGGER.error(f"Multi-market analysis failed: {e}, using default market")
+            candles = self._fetch_candles()
+            signal = self.strategy.on_candles(candles)
+            return self.market, signal, candles
+    
     def run_once(self) -> dict | None:
-        candles = self._fetch_candles()
-        signal = self.strategy.on_candles(candles)
-        LOGGER.info("Strategy %s signal: %s", self.strategy.name, signal.value)
+        # AI 전략이면 여러 코인 분석, 아니면 기존 방식
+        selected_market, signal, candles = self._analyze_multiple_markets()
+        
+        LOGGER.info("Strategy %s signal: %s for %s", self.strategy.name, signal.value, selected_market)
         
         # AI 전략인 경우 분석 결과 저장
         if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
             self.last_ai_analysis = self.strategy.last_analysis.copy()
+            # 선택된 market 정보 추가
+            self.last_ai_analysis['selected_market'] = selected_market
             # 타임스탬프 추가
             self.last_ai_analysis['timestamp'] = datetime.now(UTC).isoformat()
             # signal을 문자열로 변환 (StrategySignal enum -> string)

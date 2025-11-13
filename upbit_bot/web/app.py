@@ -1154,6 +1154,7 @@ def _render_dashboard(
                 if (data.ai_analysis && data.ai_analysis.market_data) {{
                     const analysis = data.ai_analysis;
                     const marketData = analysis.market_data;
+                    const selectedMarket = analysis.selected_market || 'N/A';
                     let signal = analysis.signal || 'HOLD';
                     
                     // signal 값 정규화 (StrategySignal enum -> string)
@@ -1184,7 +1185,9 @@ def _render_dashboard(
                     const consoleEl = document.getElementById('ai-console-content');
                     if (consoleEl) {{
                         const timestamp = analysis.timestamp ? new Date(analysis.timestamp).toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}}) : new Date().toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
-                        const message = `[${{timestamp}}] ${{signalEmoji}} ${{signal}} (신뢰도: ${{confidence.toFixed(1)}}%) | 가격: ${{marketData.current_price?.toLocaleString('ko-KR') || 'N/A'}}원 | 변동성: ${{marketData.volatility?.toFixed(2) || 'N/A'}}% | 거래량: ${{marketData.volume_ratio?.toFixed(2) || 'N/A'}}x`;
+                        // 코인 이름만 추출 (KRW-BTC -> BTC)
+                        const coinName = selectedMarket.replace('KRW-', '') || 'N/A';
+                        const message = `[${{timestamp}}] ${{coinName}} | ${{signalEmoji}} ${{signal}} (신뢰도: ${{confidence.toFixed(1)}}%) | 가격: ${{marketData.current_price?.toLocaleString('ko-KR') || 'N/A'}}원 | 변동성: ${{marketData.volatility?.toFixed(2) || 'N/A'}}% | 거래량: ${{marketData.volume_ratio?.toFixed(2) || 'N/A'}}x`;
                         
                         addAIConsoleMessage(message, signalColor);
                     }}
