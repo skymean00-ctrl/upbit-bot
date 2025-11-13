@@ -558,6 +558,25 @@ def _render_dashboard(
             </div>
         </div>
 
+        <!-- AI Analysis Console Window (Collapsible) -->
+        <div class="mb-6 bg-gray-900 dark:bg-gray-950 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
+            <button id="console-toggle" class="w-full bg-gray-800 px-4 py-3 border-b border-gray-700 flex items-center justify-between hover:bg-gray-750 transition" type="button">
+                <h3 class="text-sm font-semibold text-green-400 flex items-center gap-2">
+                    <span>🤖</span>
+                    <span>AI 분석 콘솔</span>
+                </h3>
+                <div class="flex items-center gap-2">
+                    <button id="console-clear-btn" class="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition" onclick="event.stopPropagation()">
+                        Clear
+                    </button>
+                    <span class="text-lg" id="console-icon">▲</span>
+                </div>
+            </button>
+            <div id="ai-console-content" class="h-48 overflow-y-auto p-4 font-mono text-sm text-green-400 bg-gray-900" style="display: none;">
+                <div class="text-gray-500">🔄 AI 분석 대기 중...</div>
+            </div>
+        </div>
+
         <!-- Balance Cards -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
@@ -704,7 +723,7 @@ def _render_dashboard(
                     <h2 class="text-xl font-bold text-gray-900 dark:text-white">📊 상태</h2>
                     <span class="text-2xl" id="status-icon">▼</span>
                 </button>
-                <div class="space-y-3 mt-4" id="status-content">
+                <div class="space-y-3 mt-4" id="status-content" style="display: none;">
                     <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
                         <span class="text-gray-600 dark:text-gray-400">Current Market</span>
                         <span class="font-semibold text-gray-900 dark:text-white">{state.market}</span>
@@ -1037,6 +1056,48 @@ def _render_dashboard(
                 icon.textContent = '▼';
             }}
         }});
+        
+        // AI 콘솔 토글
+        document.getElementById('console-toggle').addEventListener('click', () => {{
+            const content = document.getElementById('ai-console-content');
+            const icon = document.getElementById('console-icon');
+            if (content.style.display === 'none') {{
+                content.style.display = 'block';
+                icon.textContent = '▲';
+            }} else {{
+                content.style.display = 'none';
+                icon.textContent = '▼';
+            }}
+        }});
+        
+        // AI 콘솔 Clear 버튼
+        document.getElementById('console-clear-btn').addEventListener('click', (e) => {{
+            e.stopPropagation();
+            const console = document.getElementById('ai-console-content');
+            console.innerHTML = '<div class="text-gray-500">🔄 콘솔 초기화됨...</div>';
+        }});
+        
+        // AI 분석 메시지 추가 함수
+        window.addAIConsoleMessage = function(message, type = 'info') {{
+            const console = document.getElementById('ai-console-content');
+            const timestamp = new Date().toLocaleTimeString('ko-KR');
+            
+            // 첫 메시지면 대기 메시지 제거
+            if (console.querySelector('.text-gray-500')) {{
+                console.innerHTML = '';
+            }}
+            
+            const color = type === 'error' ? 'text-red-400' : type === 'success' ? 'text-green-400' : 'text-gray-400';
+            const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : 'ℹ️';
+            
+            const line = document.createElement('div');
+            line.className = `{{color}} py-0.5`;
+            line.textContent = `[${{timestamp}}] ${{prefix}} ${{message}}`;
+            console.appendChild(line);
+            
+            // 자동 스크롤
+            console.scrollTop = console.scrollHeight;
+        }};
         
         // Ollama 연결 상태 모니터링 (30초마다)
         async function checkOllamaConnection() {{
