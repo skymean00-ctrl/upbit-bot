@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, AsyncGenerator, Optional
 
 import requests
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from upbit_bot.config import Settings, load_settings
 from upbit_bot.core import UpbitClient
@@ -228,6 +229,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/balance")
     async def balance() -> JSONResponse:
         return JSONResponse(controller.get_account_overview())
+
+    @app.get("/api/stream")
+    async def stream_updates() -> StreamingResponse:
+        """Server-Sent Events stream for real-time updates."""
+        async def generate() -> AsyncGenerator[str, None]:
+            while True:
+                try:
+                    # Get current account overview
+                    account = controller.get_account_overview()
+                    state = controller.get_state().as_dict()
+                    
+                    data = {
+                        "timestamp": int(__import__("time").time() * 1000),
+                        "balance": account,
+                        "state": state,
+                    }
+                    
+                    # Send SSE formatted data
+                    yield f"data: {json.dumps(data)}\n\n"
+                    
+                    # Update every 3 seconds for responsive UI
+                    await asyncio.sleep(3)
+                except Exception as e:
+                    logger.error(f"Stream error: {e}")
+                    await asyncio.sleep(3)
+        
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.get("/trades")
     async def get_trades(limit: int = 50) -> JSONResponse:
@@ -551,28 +579,25 @@ def _render_dashboard(
                 <svg class="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 mr-3" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
                 </svg>
-                <div>
+    <div>
                     <h3 class="text-sm font-semibold text-red-800 dark:text-red-200 mb-1">⚠️ Ollama 연결 끊김</h3>
                     <p class="text-sm text-red-700 dark:text-red-300">AI 시장 분석 서비스를 사용할 수 없습니다. 노트북의 Ollama 서버 상태를 확인해주세요. (IP: 100.98.189.30:11434)</p>
-                </div>
+    </div>
             </div>
         </div>
 
-        <!-- AI Analysis Console Window (Collapsible) -->
+        <!-- AI Analysis Console Window (Always Visible - 5 Lines) -->
         <div class="mb-6 bg-gray-900 dark:bg-gray-950 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
-            <button id="console-toggle" class="w-full bg-gray-800 px-4 py-3 border-b border-gray-700 flex items-center justify-between hover:bg-gray-750 transition" type="button">
+            <div class="bg-gray-800 px-4 py-3 border-b border-gray-700 flex items-center justify-between">
                 <h3 class="text-sm font-semibold text-green-400 flex items-center gap-2">
                     <span>🤖</span>
                     <span>AI 분석 콘솔</span>
                 </h3>
-                <div class="flex items-center gap-2">
-                    <button id="console-clear-btn" class="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition" onclick="event.stopPropagation()">
-                        Clear
-                    </button>
-                    <span class="text-lg" id="console-icon">▲</span>
-                </div>
-            </button>
-            <div id="ai-console-content" class="h-48 overflow-y-auto p-4 font-mono text-sm text-green-400 bg-gray-900" style="display: none;">
+                <button id="console-clear-btn" class="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition">
+                    Clear
+                </button>
+            </div>
+            <div id="ai-console-content" class="overflow-y-auto p-4 font-mono text-sm text-green-400 bg-gray-900" style="height: 7.5em; line-height: 1.5em;">
                 <div class="text-gray-500">🔄 AI 분석 대기 중...</div>
             </div>
         </div>
@@ -583,7 +608,7 @@ def _render_dashboard(
                 <div class="flex items-center justify-between">
                     <div>
                         <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">KRW Balance</p>
-                        <p class="text-3xl font-bold text-gray-900 dark:text-white">{krw_balance:,.0f}</p>
+                        <p class="text-3xl font-bold text-gray-900 dark:text-white" id="balance-krw">{krw_balance:,.0f}</p>
                         <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">KRW</p>
                     </div>
                     <div class="w-12 h-12 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center">
@@ -598,7 +623,7 @@ def _render_dashboard(
                 <div class="flex items-center justify-between">
                     <div>
                         <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">Crypto Value</p>
-                        <p class="text-3xl font-bold text-gray-900 dark:text-white">{total_crypto_value:,.0f}</p>
+                        <p class="text-3xl font-bold text-gray-900 dark:text-white" id="balance-crypto">{total_crypto_value:,.0f}</p>
                         <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">KRW</p>
                     </div>
                     <div class="w-12 h-12 bg-purple-100 dark:bg-purple-900 rounded-full flex items-center justify-center">
@@ -613,7 +638,7 @@ def _render_dashboard(
                 <div class="flex items-center justify-between">
                     <div>
                         <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Balance</p>
-                        <p class="text-3xl font-bold text-gray-900 dark:text-white">{total_balance:,.0f}</p>
+                        <p class="text-3xl font-bold text-gray-900 dark:text-white" id="balance-total">{total_balance:,.0f}</p>
                         <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">KRW</p>
                     </div>
                     <div class="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
@@ -648,7 +673,7 @@ def _render_dashboard(
                                 {strategy_info.get(strategy_key, {}).get('name', strategy_key)}
                             </option>
                             ''' for strategy_key in AVAILABLE_STRATEGIES])}
-                        </select>
+                </select>
                         <div id="strategy-description" class="mt-2 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
                             <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">
                                 <strong>{strategy_info.get(state.strategy, {}).get('name', '알 수 없음')}</strong>
@@ -862,9 +887,9 @@ def _render_dashboard(
                                     </div>
                                 </td>
                             </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="6" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">거래 가능한 코인이 없습니다</td></tr>'}
-                        </tbody>
-                    </table>
-                </div>
+                </tbody>
+            </table>
+    </div>
             </div>
 
             <!-- Latest Order -->
@@ -973,8 +998,77 @@ def _render_dashboard(
     <script>
         const STRATEGY_INFO = {json.dumps({k: v for k, v in strategy_info.items()}, ensure_ascii=False)};
         let currentChartInstance = null;
+        let eventSource = null;
         
-        // 실시간 현재가 업데이트
+        // SSE 스트림 연결
+        function connectEventStream() {{
+            if (eventSource) return; // 이미 연결됨
+            
+            eventSource = new EventSource('/api/stream');
+            
+            eventSource.onopen = () => {{
+                console.log('✅ 실시간 스트림 연결됨');
+            }};
+            
+            eventSource.onmessage = (event) => {{
+                try {{
+                    const data = JSON.parse(event.data);
+                    updateUIWithStreamData(data);
+                }} catch (err) {{
+                    console.error('Stream data parse error:', err);
+                }}
+            }};
+            
+            eventSource.onerror = () => {{
+                console.error('❌ 스트림 연결 에러, 5초 후 재연결...');
+                if (eventSource) {{
+                    eventSource.close();
+                    eventSource = null;
+                }}
+                setTimeout(connectEventStream, 5000);
+            }};
+        }}
+        
+        // 스트림 데이터로 UI 업데이트
+        function updateUIWithStreamData(data) {{
+            try {{
+                // 잔액 업데이트
+                if (data.balance) {{
+                    // KRW 잔액
+                    const krwEl = document.getElementById('balance-krw');
+                    if (krwEl) {{
+                        const krw = data.balance.krw_balance ?? 0;
+                        krwEl.textContent = krw.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                    }}
+                    
+                    // Crypto Value
+                    const cryptoEl = document.getElementById('balance-crypto');
+                    if (cryptoEl) {{
+                        const crypto = data.balance.total_crypto_value ?? 0;
+                        cryptoEl.textContent = crypto.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                    }}
+                    
+                    // Total Balance
+                    const totalEl = document.getElementById('balance-total');
+                    if (totalEl) {{
+                        const total = (data.balance.krw_balance ?? 0) + (data.balance.total_crypto_value ?? 0);
+                        totalEl.textContent = total.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                    }}
+                }}
+                
+                // 상태 업데이트 (마지막 실행, 마지막 신호)
+                if (data.state) {{
+                    const lastRunEl = document.getElementById('last-run-time');
+                    const lastSignalEl = document.getElementById('last-signal-badge');
+                    if (lastRunEl) lastRunEl.textContent = data.state.last_run ?? '-';
+                    if (lastSignalEl) lastSignalEl.textContent = data.state.last_signal ?? 'HOLD';
+                }}
+            }} catch (err) {{
+                console.error('Stream update error:', err);
+            }}
+        }}
+        
+        // 실시간 현재가 업데이트 (기존 함수)
         async function updateAccountValues() {{
             try {{
                 const table = document.querySelector('table tbody');
@@ -1027,8 +1121,11 @@ def _render_dashboard(
             }}
         }}
         
-        // 10초마다 실시간 업데이트
-        setInterval(updateAccountValues, 10000);
+        // SSE 스트림 연결 (페이지 로드 후 즉시)
+        connectEventStream();
+        
+        // 5초마다 현재가 업데이트 (더 자주 업데이트)
+        setInterval(updateAccountValues, 5000);
         // 초기 로드
         updateAccountValues();
         
@@ -1057,24 +1154,10 @@ def _render_dashboard(
             }}
         }});
         
-        // AI 콘솔 토글
-        document.getElementById('console-toggle').addEventListener('click', () => {{
-            const content = document.getElementById('ai-console-content');
-            const icon = document.getElementById('console-icon');
-            if (content.style.display === 'none') {{
-                content.style.display = 'block';
-                icon.textContent = '▲';
-            }} else {{
-                content.style.display = 'none';
-                icon.textContent = '▼';
-            }}
-        }});
-        
         // AI 콘솔 Clear 버튼
-        document.getElementById('console-clear-btn').addEventListener('click', (e) => {{
-            e.stopPropagation();
-            const console = document.getElementById('ai-console-content');
-            console.innerHTML = '<div class="text-gray-500">🔄 콘솔 초기화됨...</div>';
+        document.getElementById('console-clear-btn').addEventListener('click', () => {{
+            const consoleEl = document.getElementById('ai-console-content');
+            consoleEl.innerHTML = '<div class="text-gray-500">🔄 콘솔 초기화됨...</div>';
         }});
         
         // AI 분석 메시지 추가 함수
@@ -1309,11 +1392,18 @@ def _render_dashboard(
                 const response = await fetch('/statistics');
                 const stats = await response.json();
                 
-                document.getElementById('stat-total-trades').textContent = stats.total_trades || 0;
-                document.getElementById('stat-closed-positions').textContent = stats.closed_positions || 0;
-                document.getElementById('stat-win-rate').textContent = (stats.win_rate || 0).toFixed(1) + '%';
-                document.getElementById('stat-total-pnl').textContent = (stats.total_pnl || 0).toLocaleString() + ' KRW';
-                document.getElementById('stat-avg-pnl').textContent = (stats.avg_pnl_pct || 0).toFixed(2) + '%';
+                const statElements = {{
+                    'stat-total-trades': stats.total_trades || 0,
+                    'stat-closed-positions': stats.closed_positions || 0,
+                    'stat-win-rate': (stats.win_rate || 0).toFixed(1) + '%',
+                    'stat-total-pnl': (stats.total_pnl || 0).toLocaleString() + ' KRW',
+                    'stat-avg-pnl': (stats.avg_pnl_pct || 0).toFixed(2) + '%'
+                }};
+                
+                Object.entries(statElements).forEach(([id, value]) => {{
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = value;
+                }});
             }} catch (error) {{
                 console.error('Failed to load statistics:', error);
             }}
