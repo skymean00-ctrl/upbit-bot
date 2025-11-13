@@ -892,9 +892,9 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Statistics (Full Width) -->
-        <div class="mb-8">
-            <!-- Performance Analysis -->
+        <!-- Statistics & Trade History (2 Columns) -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Performance Analysis (Left) -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">📊 성과 분석</h2>
                 <div id="statistics" class="space-y-2">
@@ -953,11 +953,8 @@ def _render_dashboard(
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Trade History (Compact - Asset Snapshot Height) -->
-        <div class="mb-8">
-            <!-- Trade History -->
+            <!-- Trade History (Right) -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
                 <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 20em;">
@@ -1360,7 +1357,7 @@ def _render_dashboard(
                 if (data.trades && data.trades.length > 0) {{
                     tbody.innerHTML = data.trades.map(trade => {{
                         const date = new Date(trade.timestamp);
-                        const timeStr = date.toLocaleString('ko-KR', {{ year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }});
+                        const timeStr = date.toLocaleTimeString('ko-KR', {{ hour: '2-digit', minute: '2-digit' }});
                         const strategyName = STRATEGY_INFO[trade.strategy]?.name || trade.strategy;
                         const sideColor = trade.side === 'buy' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
                         const sideBg = trade.side === 'buy' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20';
