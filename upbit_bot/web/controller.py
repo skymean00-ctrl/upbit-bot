@@ -62,6 +62,10 @@ class TradingController:
             last_order=self.engine.last_order_info,
         )
         return state
+    
+    def get_ai_analysis(self) -> dict[str, Any] | None:
+        """AI 분석 결과 가져오기."""
+        return getattr(self.engine, 'last_ai_analysis', None)
 
     def get_account_overview(self) -> dict[str, Any]:
         try:

@@ -239,11 +239,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # Get current account overview
                     account = controller.get_account_overview()
                     state = controller.get_state().as_dict()
+                    ai_analysis = controller.get_ai_analysis()  # AI 분석 결과 가져오기
                     
                     data = {
                         "timestamp": int(__import__("time").time() * 1000),
                         "balance": account,
                         "state": state,
+                        "ai_analysis": ai_analysis,  # AI 분석 결과 포함
                     }
                     
                     # Send SSE formatted data
@@ -1147,6 +1149,46 @@ def _render_dashboard(
                     if (lastRunEl) lastRunEl.textContent = data.state.last_run ?? '-';
                     if (lastSignalEl) lastSignalEl.textContent = data.state.last_signal ?? 'HOLD';
                 }}
+                
+                // AI 분석 결과 표시
+                if (data.ai_analysis && data.ai_analysis.market_data) {{
+                    const analysis = data.ai_analysis;
+                    const marketData = analysis.market_data;
+                    let signal = analysis.signal || 'HOLD';
+                    
+                    // signal 값 정규화 (StrategySignal enum -> string)
+                    if (typeof signal === 'object' && signal.value) {{
+                        signal = signal.value;
+                    }} else if (typeof signal === 'string') {{
+                        // 'StrategySignal.BUY' 형태에서 'BUY' 추출
+                        signal = signal.replace('StrategySignal.', '').replace('StrategySignal', '').replace('.', '').trim();
+                    }}
+                    
+                    const confidence = (analysis.confidence || 0) * 100;
+                    
+                    // 신호에 따른 이모지와 색상
+                    let signalEmoji = '⚪';
+                    let signalColor = 'gray';
+                    if (signal === 'BUY' || signal.toUpperCase() === 'BUY') {{
+                        signalEmoji = '🟢';
+                        signalColor = 'green';
+                    }} else if (signal === 'SELL' || signal.toUpperCase() === 'SELL') {{
+                        signalEmoji = '🔴';
+                        signalColor = 'red';
+                    }} else {{
+                        signalEmoji = '⚪';
+                        signalColor = 'gray';
+                    }}
+                    
+                    // 메시지 생성 (최대 5줄 유지)
+                    const consoleEl = document.getElementById('ai-console-content');
+                    if (consoleEl) {{
+                        const timestamp = analysis.timestamp ? new Date(analysis.timestamp).toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}}) : new Date().toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
+                        const message = `[${{timestamp}}] ${{signalEmoji}} ${{signal}} (신뢰도: ${{confidence.toFixed(1)}}%) | 가격: ${{marketData.current_price?.toLocaleString('ko-KR') || 'N/A'}}원 | 변동성: ${{marketData.volatility?.toFixed(2) || 'N/A'}}% | 거래량: ${{marketData.volume_ratio?.toFixed(2) || 'N/A'}}x`;
+                        
+                        addAIConsoleMessage(message, signalColor);
+                    }}
+                }}
             }} catch (err) {{
                 console.error('Stream update error:', err);
             }}
@@ -1244,23 +1286,39 @@ def _render_dashboard(
             consoleEl.innerHTML = '<div class="text-gray-500">🔄 콘솔 초기화됨...</div>';
         }});
         
-        // AI 분석 메시지 추가 함수
+        // AI 분석 메시지 추가 함수 (최대 5줄 유지)
         window.addAIConsoleMessage = function(message, type = 'info') {{
             const console = document.getElementById('ai-console-content');
-            const timestamp = new Date().toLocaleTimeString('ko-KR');
+            if (!console) return;
             
             // 첫 메시지면 대기 메시지 제거
-            if (console.querySelector('.text-gray-500')) {{
+            const waitingMsg = console.querySelector('.text-gray-500');
+            if (waitingMsg) {{
                 console.innerHTML = '';
             }}
             
-            const color = type === 'error' ? 'text-red-400' : type === 'success' ? 'text-green-400' : 'text-gray-400';
-            const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : 'ℹ️';
+            // 타입에 따른 색상 설정
+            let color = 'text-gray-400';
+            if (type === 'error' || type === 'red') {{
+                color = 'text-red-400';
+            }} else if (type === 'success' || type === 'green') {{
+                color = 'text-green-400';
+            }} else if (type === 'yellow') {{
+                color = 'text-yellow-400';
+            }}
             
             const line = document.createElement('div');
             line.className = `{{color}} py-0.5`;
-            line.textContent = `[${{timestamp}}] ${{prefix}} ${{message}}`;
+            line.textContent = message;
             console.appendChild(line);
+            
+            // 최대 5줄만 유지 (오래된 메시지 제거)
+            const lines = console.querySelectorAll('div');
+            if (lines.length > 5) {{
+                for (let i = 0; i < lines.length - 5; i++) {{
+                    lines[i].remove();
+                }}
+            }}
             
             // 자동 스크롤
             console.scrollTop = console.scrollHeight;

@@ -59,6 +59,7 @@ class ExecutionEngine:
         self.last_order_info: dict | None = None
         self.last_run_at: datetime | None = None
         self.last_error: str | None = None
+        self.last_ai_analysis: dict | None = None  # AI 분석 결과 저장
         self.trade_history_store = trade_history_store or TradeHistoryStore()
         self._load_positions()
 
@@ -570,6 +571,18 @@ class ExecutionEngine:
         candles = self._fetch_candles()
         signal = self.strategy.on_candles(candles)
         LOGGER.info("Strategy %s signal: %s", self.strategy.name, signal.value)
+        
+        # AI 전략인 경우 분석 결과 저장
+        if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
+            self.last_ai_analysis = self.strategy.last_analysis.copy()
+            # 타임스탬프 추가
+            self.last_ai_analysis['timestamp'] = datetime.now(UTC).isoformat()
+            # signal을 문자열로 변환 (StrategySignal enum -> string)
+            if hasattr(self.last_ai_analysis.get('signal'), 'value'):
+                self.last_ai_analysis['signal'] = self.last_ai_analysis['signal'].value
+            elif hasattr(self.last_ai_analysis.get('signal'), 'name'):
+                self.last_ai_analysis['signal'] = self.last_ai_analysis['signal'].name
+        
         self.last_signal = signal
         self.last_run_at = datetime.now(UTC)
         self.last_error = None
