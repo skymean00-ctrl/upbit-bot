@@ -597,7 +597,11 @@ def _render_dashboard(
                             class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             required
                         />
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">보유 원화의 %를 1건당 매수 금액으로 사용 (기본값: 3%)</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            💡 보유 원화의 %를 1건당 매수 금액으로 계산<br/>
+                            • 계산값 ≥ 6,000원: 설정된 퍼센트 사용<br/>
+                            • 계산값 &lt; 6,000원: 최소값 6,000원으로 매수 (기본값: 3%)
+                        </p>
                     </div>
                     <button 
                         type="submit" 

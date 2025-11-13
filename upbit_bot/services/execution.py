@@ -94,11 +94,16 @@ class ExecutionEngine:
 
     def _determine_order_amount(self) -> float:
         """
-        동적 주문 금액 결정.
+        동적 주문 금액 결정 (최소단위: 6,000 KRW).
         
         1. position_sizer가 있으면 사용
         2. 아니면 현재 KRW 잔액의 order_amount_pct 사용
         3. 둘 다 없으면 order_amount 사용 (후속 호환성)
+        4. 최종 금액은 최소 6,000 KRW 이상
+        
+        계산:
+        - 계산된 금액 ≥ 6,000 KRW: 설정된 퍼센트 사용
+        - 계산된 금액 < 6,000 KRW: 6,000 KRW 사용
         """
         if self.position_sizer:
             stake = self.position_sizer.krw_stake()
@@ -121,7 +126,15 @@ class ExecutionEngine:
                 else:
                     raise ValueError("Cannot determine order amount")
         
-        return max(stake, 100.0)  # 최소 100 KRW
+        MIN_ORDER_AMOUNT = 6000.0  # 최소 주문 금액: 6,000 KRW
+        final_amount = max(stake, MIN_ORDER_AMOUNT)
+        
+        if final_amount == MIN_ORDER_AMOUNT and stake < MIN_ORDER_AMOUNT:
+            LOGGER.info(
+                f"Order amount adjusted to minimum: {stake:.0f} KRW → {final_amount:.0f} KRW"
+            )
+        
+        return final_amount
 
     def _notify(self, message: str, **kwargs) -> None:
         for notifier in self.notifiers:
