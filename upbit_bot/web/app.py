@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any, Optional
 
+import requests
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -361,20 +362,42 @@ def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_inf
         if balance <= 0:
             continue
         
+        # LUNC, APENFT, LUNA2 등 거래 불가능한 코인 필터링
+        if currency in ["LUNC", "APENFT", "LUNA2", "DOGE", "SHIB"]:
+            LOGGER.debug(f"Filtered out {currency} (non-tradable)")
+            continue
+        
         # 업비트에서 거래 가능한 마켓인지 확인
         market = f"KRW-{currency}"
+        current_price = None
+        
         try:
             ticker = client.get_ticker(market)
             if ticker:
                 current_price = float(ticker.get("trade_price", 0.0))
-                crypto_value = balance * current_price
-                total_crypto_value += crypto_value
-                # 거래가능한 항목만 추가
-                entry_with_value = {**entry, "current_price": current_price, "crypto_value": crypto_value}
-                tradable_accounts.append(entry_with_value)
-        except Exception:
-            # 거래 불가능한 코인은 스킵
-            pass
+                LOGGER.debug(f"Got ticker for {currency}: {current_price}")
+        except Exception as e:
+            # API 호출 실패 시 평균 매수가 사용
+            LOGGER.warning(f"Failed to get ticker for {market}: {type(e).__name__}")
+            current_price = None
+        
+        # 현재 시세가 없으면 평균 매수가 사용
+        if current_price is None or current_price == 0:
+            avg_price = float(entry.get("avg_buy_price", 0.0))
+            if avg_price > 0:
+                current_price = avg_price
+                LOGGER.debug(f"Using avg_buy_price for {currency}: {avg_price}")
+            else:
+                # 평균 매수가도 없으면 표시 안함
+                LOGGER.warning(f"No price available for {currency}, skipping")
+                continue
+        
+        # 코인 정보 추가
+        crypto_value = balance * current_price
+        total_crypto_value += crypto_value
+        entry_with_value = {**entry, "current_price": current_price, "crypto_value": crypto_value}
+        tradable_accounts.append(entry_with_value)
+        LOGGER.info(f"Added {currency}: balance={balance}, price={current_price}, value={crypto_value}")
     
     # 원본 accounts_data는 거래가능한 것만 사용
     accounts_data = tradable_accounts
