@@ -309,6 +309,18 @@ class ExecutionEngine:
             if self.position_price is not None:
                 LOGGER.debug("Position already open for %s; ignoring BUY signal.", self.market)
                 return None
+            
+            # 포트폴리오 체크: 최대 5개 포지션
+            if not self.can_open_new_position():
+                # 5개 모두 찼으면 가장 나쁜 포지션 청산
+                LOGGER.info("Portfolio full (5 positions). Liquidating worst position...")
+                liquidate_result = self.liquidate_worst_position()
+                if not liquidate_result.get("success"):
+                    LOGGER.warning(f"Failed to liquidate worst position: {liquidate_result.get('error')}")
+                    return None
+                # 청산 후 새로운 포지션 매수
+                LOGGER.info(f"Worst position liquidated, proceeding with new buy signal")
+            
             if self.risk_manager and not self.risk_manager.can_open_position(self.market):
                 return None
             stake = self._determine_order_amount()
@@ -690,3 +702,149 @@ class ExecutionEngine:
             LOGGER.error(f"Force exit failed: {e}")
         
         return results
+    
+    def get_portfolio_status(self) -> dict[str, Any]:
+        """
+        현재 포트폴리오 상태 조회.
+        
+        반환:
+        - total_positions: 열린 포지션 개수
+        - open_positions: 열린 포지션 목록 (수익률 순 정렬)
+        - worst_position: 가장 낮은 수익률 포지션
+        """
+        try:
+            positions = self.trade_history_store.get_open_positions()
+            
+            if not positions:
+                return {
+                    "total_positions": 0,
+                    "open_positions": [],
+                    "worst_position": None,
+                }
+            
+            # 각 포지션의 현재가 및 수익률 계산
+            positions_with_pnl = []
+            
+            for pos in positions:
+                market = pos.get("market")
+                entry_price = float(pos.get("entry_price", 0))
+                entry_volume = float(pos.get("entry_volume", 0))
+                
+                try:
+                    # 현재가 조회
+                    ticker = self.client.get_ticker(market)
+                    if not ticker:
+                        continue
+                    
+                    current_price = float(ticker.get("trade_price", 0))
+                    pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                    current_value = entry_volume * current_price
+                    
+                    positions_with_pnl.append({
+                        **pos,
+                        "current_price": current_price,
+                        "pnl_pct": pnl_pct,
+                        "current_value": current_value,
+                    })
+                    
+                except Exception as e:
+                    LOGGER.warning(f"Failed to get price for {market}: {e}")
+                    continue
+            
+            # 수익률 기준 정렬 (가장 낮은 것부터)
+            positions_with_pnl.sort(key=lambda x: x.get("pnl_pct", 0))
+            
+            return {
+                "total_positions": len(positions_with_pnl),
+                "open_positions": positions_with_pnl,
+                "worst_position": positions_with_pnl[0] if positions_with_pnl else None,
+            }
+            
+        except Exception as e:
+            LOGGER.error(f"Failed to get portfolio status: {e}")
+            return {
+                "total_positions": 0,
+                "open_positions": [],
+                "worst_position": None,
+                "error": str(e),
+            }
+    
+    def can_open_new_position(self) -> bool:
+        """
+        새로운 포지션 오픈 가능 여부 판단.
+        
+        최대 5개 포지션만 동시 보유 가능
+        """
+        portfolio = self.get_portfolio_status()
+        return portfolio.get("total_positions", 0) < 5
+    
+    def liquidate_worst_position(self) -> dict[str, Any]:
+        """
+        가장 낮은 수익률 포지션 청산.
+        
+        작동:
+        1. 포트폴리오 상태 확인
+        2. 가장 낮은 수익률 포지션 찾기
+        3. 해당 포지션 시장가 매도
+        4. 결과 반환
+        """
+        result = {
+            "status": "liquidate_worst",
+            "executed_at": datetime.now(UTC).isoformat(),
+            "success": False,
+        }
+        
+        try:
+            portfolio = self.get_portfolio_status()
+            worst_pos = portfolio.get("worst_position")
+            
+            if not worst_pos:
+                result["error"] = "No open positions"
+                return result
+            
+            market = worst_pos.get("market")
+            entry_volume = float(worst_pos.get("entry_volume", 0))
+            current_price = float(worst_pos.get("current_price", 0))
+            pnl_pct = worst_pos.get("pnl_pct", 0)
+            
+            sell_amount = entry_volume * current_price
+            
+            # 최소 금액 체크
+            if sell_amount < 5000:
+                result["error"] = f"Sell amount {sell_amount:.0f}원 < 5,000원"
+                return result
+            
+            LOGGER.info(
+                f"Liquidating worst position: {market} "
+                f"(PnL: {pnl_pct:.2f}%, Amount: {sell_amount:.0f}원)"
+            )
+            
+            # 시장가 매도
+            order = self.client.place_order(
+                market=market,
+                side="ask",
+                volume=str(entry_volume),
+                ord_type="market",
+            )
+            
+            result.update({
+                "success": True,
+                "market": market,
+                "volume": entry_volume,
+                "price": current_price,
+                "amount": sell_amount,
+                "pnl_pct": pnl_pct,
+                "order_id": order.get("uuid"),
+                "message": f"{market} 청산 완료 (수익률: {pnl_pct:.2f}%)",
+            })
+            
+            LOGGER.info(
+                f"Worst position liquidated: {market} @ {current_price} "
+                f"= {sell_amount:.0f}원 (PnL: {pnl_pct:.2f}%)"
+            )
+            
+        except Exception as e:
+            result["error"] = str(e)
+            LOGGER.error(f"Failed to liquidate worst position: {e}")
+        
+        return result
