@@ -718,139 +718,7 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Server Control & Account -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Controls Card -->
-            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
-                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                    <span class="text-3xl">🎮</span>
-                    <span>서버 제어</span>
-                </h2>
-                
-                <!-- 서버 상태 표시 -->
-                <div class="mb-6 p-5 rounded-xl bg-gradient-to-br from-blue-50 via-blue-100 to-indigo-50 dark:from-blue-900/30 dark:via-blue-800/20 dark:to-indigo-900/30 border-2 border-blue-200 dark:border-blue-800 shadow-md">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">서버 상태</p>
-                            <div class="flex items-center gap-3">
-                                <div class="w-4 h-4 rounded-full bg-green-500 animate-pulse shadow-lg shadow-green-500/50" id="server-status-dot"></div>
-                                <span class="text-xl font-extrabold text-gray-900 dark:text-white" id="server-status-text">Running</span>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">거래 모드</p>
-                            <span class="inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md {'bg-gradient-to-r from-blue-500 to-blue-600 text-white' if state.dry_run else 'bg-gradient-to-r from-orange-500 to-red-600 text-white'}" id="trading-mode-badge">{state.dry_run and 'Dry-run' or 'LIVE'}</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="space-y-4">
-                    <form method="post" action="/start" class="space-y-3">
-                        <div>
-                            <label for="mode" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">📊 거래 모드 선택</label>
-                            <select id="mode" name="mode" class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                <option value="dry" {'selected' if state.dry_run else ''}>🟢 Dry-run (시뮬레이션 - 실제 거래 없음)</option>
-                                <option value="live" {'selected' if not state.dry_run else ''}>🔴 Live (실제 거래 - 주의!)</option>
-                </select>
-                        </div>
-                        <button type="submit" class="btn-success w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            <span>서버 시작</span>
-                        </button>
-            </form>
-            <form method="post" action="/stop">
-                        <button type="submit" class="btn-danger w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"></path>
-                            </svg>
-                            <span>서버 중지</span>
-                        </button>
-            </form>
-            
-            <!-- 강제 탈출 버튼 -->
-            <button id="force-exit-btn" class="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 active:from-orange-700 active:to-red-800 text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
-                </svg>
-                <span>강제 탈출 (모든 코인 매도)</span>
-            </button>
-                    
-                    <!-- 추가 정보 -->
-                    <div class="grid grid-cols-2 gap-2 pt-4 border-t border-gray-200 dark:border-gray-700 text-xs">
-                        <div>
-                            <p class="text-gray-600 dark:text-gray-400">마지막 실행</p>
-                            <p class="font-semibold text-gray-900 dark:text-white" id="last-run-time">-</p>
-                        </div>
-                        <div>
-                            <p class="text-gray-600 dark:text-gray-400">마지막 신호</p>
-                            <p class="font-semibold text-gray-900 dark:text-white" id="last-signal-badge">HOLD</p>
-                        </div>
-                    </div>
-                </div>
-            
-            <!-- Account Snapshot -->
-            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
-                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                    <span class="text-3xl">💼</span>
-                    <span>자산 현황</span>
-                </h2>
-                {f'''
-                <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                    <div class="flex items-start">
-                        <svg class="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                        <div>
-                            <p class="text-sm font-semibold text-red-600 dark:text-red-400 mb-1">인증 오류</p>
-                            <p class="text-xs text-red-600 dark:text-red-400">
-                                {'API 키가 유효하지 않습니다. .env 파일의 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 확인해주세요.' if '401' in str(account_error) or 'invalid_access_key' in str(account_error) else str(account_error)}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                ''' if account_error else ''}
-                <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
-                <thead>
-                            <tr class="border-b-2 border-gray-300 dark:border-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800">
-                                <th class="text-left py-4 px-4 font-bold text-gray-800 dark:text-gray-200">코인</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">보유량</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">매수가</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">구매금액 (원)</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가치 (원)</th>
-                            </tr>
-                </thead>
-                <tbody>
-                            {''.join([f'''
-                            <tr class="table-row border-b border-gray-100 dark:border-gray-700 cursor-pointer transition-all duration-200" onclick="toggleChart('{entry.get('currency', '?')}', this)">
-                                <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')} <span class="text-xs text-gray-400 ml-1">📊</span></td>
-                                <td class="py-3 px-4 text-right text-gray-900 dark:text-white">{float(entry.get('balance', 0)):,.8f}</td>
-                                <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('avg_buy_price', 0)):,.0f}" if entry.get('avg_buy_price') and float(entry.get('avg_buy_price', 0)) > 0 else '-'}</td>
-                                <td class="py-3 px-4 text-right font-medium text-blue-600 dark:text-blue-400">{f"{float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('purchase_amount') else '-'}</td>
-                                <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('current_price', 0)):,.0f}" if entry.get('current_price') and float(entry.get('current_price', 0)) > 0 else '-'}</td>
-                                <td class="py-3 px-4 text-right font-medium text-green-600 dark:text-green-400">{f"{float(entry.get('crypto_value', 0)):,.0f}" if entry.get('crypto_value') else '-'}</td>
-                            </tr>
-                            <tr id="chart-row-{entry.get('currency', '?')}" class="hidden">
-                                <td colspan="6" class="py-4 px-4">
-                                    <div id="chart-container-{entry.get('currency', '?')}" class="w-full h-64 bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-                                        <div class="flex items-center justify-center h-full text-gray-500">
-                                            <span>📈 차트 로딩 중...</span>
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="6" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">거래 가능한 코인이 없습니다</td></tr>'}
-                </tbody>
-            </table>
-    </div>
-            </div>
-        </div>
-
-        <!-- Statistics & Trade History -->
+        <!-- Statistics & Trade History (중요 정보 - 상단 배치) -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Performance Analysis -->
             <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
@@ -940,6 +808,140 @@ def _render_dashboard(
             </div>
         </div>
 
+        <!-- Server Control & Account -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Controls Card -->
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+                    <span class="text-3xl">🎮</span>
+                    <span>서버 제어</span>
+                </h2>
+                
+                <!-- 서버 상태 표시 -->
+                <div class="mb-6 p-5 rounded-xl bg-gradient-to-br from-blue-50 via-blue-100 to-indigo-50 dark:from-blue-900/30 dark:via-blue-800/20 dark:to-indigo-900/30 border-2 border-blue-200 dark:border-blue-800 shadow-md">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">서버 상태</p>
+                            <div class="flex items-center gap-3">
+                                <div class="w-4 h-4 rounded-full bg-green-500 animate-pulse shadow-lg shadow-green-500/50" id="server-status-dot"></div>
+                                <span class="text-xl font-extrabold text-gray-900 dark:text-white" id="server-status-text">Running</span>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">거래 모드</p>
+                            <span class="inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md {'bg-gradient-to-r from-blue-500 to-blue-600 text-white' if state.dry_run else 'bg-gradient-to-r from-orange-500 to-red-600 text-white'}" id="trading-mode-badge">{state.dry_run and 'Dry-run' or 'LIVE'}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="space-y-4">
+                    <form method="post" action="/start" class="space-y-3">
+                        <div>
+                            <label for="mode" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">📊 거래 모드 선택</label>
+                            <select id="mode" name="mode" class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                <option value="dry" {'selected' if state.dry_run else ''}>🟢 Dry-run (시뮬레이션 - 실제 거래 없음)</option>
+                                <option value="live" {'selected' if not state.dry_run else ''}>🔴 Live (실제 거래 - 주의!)</option>
+                </select>
+                        </div>
+                        <button type="submit" class="btn-success w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span>서버 시작</span>
+                        </button>
+            </form>
+            <form method="post" action="/stop">
+                        <button type="submit" class="btn-danger w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"></path>
+                            </svg>
+                            <span>서버 중지</span>
+                        </button>
+            </form>
+            
+            <!-- 강제 탈출 버튼 -->
+            <button id="force-exit-btn" class="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 active:from-orange-700 active:to-red-800 text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                </svg>
+                <span>강제 탈출 (모든 코인 매도)</span>
+            </button>
+                    
+                    <!-- 추가 정보 -->
+                    <div class="grid grid-cols-2 gap-2 pt-4 border-t border-gray-200 dark:border-gray-700 text-xs">
+                        <div>
+                            <p class="text-gray-600 dark:text-gray-400">마지막 실행</p>
+                            <p class="font-semibold text-gray-900 dark:text-white" id="last-run-time">-</p>
+                        </div>
+                        <div>
+                            <p class="text-gray-600 dark:text-gray-400">마지막 신호</p>
+                            <p class="font-semibold text-gray-900 dark:text-white" id="last-signal-badge">HOLD</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Account Snapshot -->
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+                    <span class="text-3xl">💼</span>
+                    <span>자산 현황</span>
+                </h2>
+                {f'''
+                <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                    <div class="flex items-start">
+                        <svg class="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <p class="text-sm font-semibold text-red-600 dark:text-red-400 mb-1">인증 오류</p>
+                            <p class="text-xs text-red-600 dark:text-red-400">
+                                {'API 키가 유효하지 않습니다. .env 파일의 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 확인해주세요.' if '401' in str(account_error) or 'invalid_access_key' in str(account_error) else str(account_error)}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                ''' if account_error else ''}
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                <thead>
+                            <tr class="border-b-2 border-gray-300 dark:border-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800">
+                                <th class="text-left py-4 px-4 font-bold text-gray-800 dark:text-gray-200">코인</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">보유량</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">매수가</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">구매금액 (원)</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가치 (원)</th>
+                            </tr>
+                </thead>
+                <tbody>
+                            {''.join([f'''
+                            <tr class="table-row border-b border-gray-100 dark:border-gray-700 cursor-pointer transition-all duration-200" onclick="toggleChart('{entry.get('currency', '?')}', this)">
+                                <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')} <span class="text-xs text-gray-400 ml-1">📊</span></td>
+                                <td class="py-3 px-4 text-right text-gray-900 dark:text-white">{float(entry.get('balance', 0)):,.8f}</td>
+                                <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('avg_buy_price', 0)):,.0f}" if entry.get('avg_buy_price') and float(entry.get('avg_buy_price', 0)) > 0 else '-'}</td>
+                                <td class="py-3 px-4 text-right font-medium text-blue-600 dark:text-blue-400">{f"{float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('purchase_amount') else '-'}</td>
+                                <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('current_price', 0)):,.0f}" if entry.get('current_price') and float(entry.get('current_price', 0)) > 0 else '-'}</td>
+                                <td class="py-3 px-4 text-right font-medium text-green-600 dark:text-green-400">{f"{float(entry.get('crypto_value', 0)):,.0f}" if entry.get('crypto_value') else '-'}</td>
+                            </tr>
+                            <tr id="chart-row-{entry.get('currency', '?')}" class="hidden">
+                                <td colspan="6" class="py-4 px-4">
+                                    <div id="chart-container-{entry.get('currency', '?')}" class="w-full h-64 bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
+                                        <div class="flex items-center justify-center h-full text-gray-500">
+                                            <span>📈 차트 로딩 중...</span>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="6" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">거래 가능한 코인이 없습니다</td></tr>'}
+                </tbody>
+            </table>
+    </div>
+            </div>
+        </div>
+
+        <!-- Settings & Status (드롭다운 - 맨 아래) -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Settings Card -->
             <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
