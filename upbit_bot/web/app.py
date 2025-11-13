@@ -650,7 +650,7 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- AI Analysis Console Window (Always Visible - 5 Lines) -->
+        <!-- AI Analysis Console Window (Always Visible - Scrollable) -->
         <div class="mb-6 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 dark:from-gray-950 dark:via-gray-900 dark:to-black rounded-2xl shadow-2xl border border-gray-700 dark:border-gray-800 overflow-hidden">
             <div class="bg-gradient-to-r from-gray-800 to-gray-900 dark:from-gray-900 dark:to-gray-800 px-5 py-4 border-b border-gray-700 dark:border-gray-800 flex items-center justify-between">
                 <h3 class="text-base font-bold text-green-400 flex items-center gap-3">
@@ -661,8 +661,8 @@ def _render_dashboard(
                     Clear
                 </button>
             </div>
-            <div id="ai-console-content" class="overflow-y-auto p-5 font-mono text-sm text-green-400 bg-gray-900 dark:bg-black" style="height: 7.5em; line-height: 1.6em;">
-                <div class="text-gray-500 flex items-center gap-2">
+            <div id="ai-console-content" class="overflow-y-auto p-5 font-mono text-sm text-green-400 bg-gray-900 dark:bg-black" style="height: 20em; line-height: 1.5em; max-height: 20em;">
+                <div id="ai-console-waiting" class="text-gray-500 flex items-center gap-2">
                     <span class="animate-spin">🔄</span>
                     <span>AI 분석 대기 중...</span>
                 </div>
@@ -1284,20 +1284,32 @@ def _render_dashboard(
         }});
         
         // AI 콘솔 Clear 버튼
+        let consoleCleared = false;
         document.getElementById('console-clear-btn').addEventListener('click', () => {{
             const consoleEl = document.getElementById('ai-console-content');
-            consoleEl.innerHTML = '<div class="text-gray-500">🔄 콘솔 초기화됨...</div>';
+            const waitingEl = document.getElementById('ai-console-waiting');
+            consoleEl.innerHTML = '';
+            if (waitingEl) {{
+                waitingEl.remove();
+            }}
+            consoleCleared = true;
+            // 초기화 메시지 추가
+            const initMsg = document.createElement('div');
+            initMsg.className = 'text-gray-500 py-0.5';
+            initMsg.textContent = '🔄 콘솔 초기화됨...';
+            consoleEl.appendChild(initMsg);
         }});
         
-        // AI 분석 메시지 추가 함수 (최대 5줄 유지)
+        // AI 분석 메시지 추가 함수 (최대 50줄 유지, 50줄 초과 시 자동 클리어)
         window.addAIConsoleMessage = function(message, type = 'info') {{
             const console = document.getElementById('ai-console-content');
             if (!console) return;
             
             // 첫 메시지면 대기 메시지 제거
-            const waitingMsg = console.querySelector('.text-gray-500');
-            if (waitingMsg) {{
-                console.innerHTML = '';
+            const waitingMsg = document.getElementById('ai-console-waiting');
+            if (waitingMsg && !consoleCleared) {{
+                waitingMsg.remove();
+                consoleCleared = false;
             }}
             
             // 타입에 따른 색상 설정
@@ -1315,15 +1327,30 @@ def _render_dashboard(
             line.textContent = message;
             console.appendChild(line);
             
-            // 최대 5줄만 유지 (오래된 메시지 제거)
+            // 최대 50줄만 유지 (50줄 초과 시 자동 클리어)
             const lines = console.querySelectorAll('div');
-            if (lines.length > 5) {{
-                for (let i = 0; i < lines.length - 5; i++) {{
-                    lines[i].remove();
+            if (lines.length > 50) {{
+                // 자동 클리어: 오래된 메시지 30줄 제거 (최신 20줄 유지)
+                const removeCount = lines.length - 20;
+                for (let i = 0; i < removeCount; i++) {{
+                    if (lines[i] && lines[i].id !== 'ai-console-waiting') {{
+                        lines[i].remove();
+                    }}
                 }}
+                // 자동 클리어 알림 추가
+                const clearMsg = document.createElement('div');
+                clearMsg.className = 'text-yellow-400 py-0.5 italic';
+                clearMsg.textContent = '... (50줄 초과로 오래된 메시지 자동 삭제됨)';
+                console.insertBefore(clearMsg, console.firstChild);
+                // 알림 메시지는 3초 후 제거
+                setTimeout(() => {{
+                    if (clearMsg.parentNode) {{
+                        clearMsg.remove();
+                    }}
+                }}, 3000);
             }}
             
-            // 자동 스크롤
+            // 자동 스크롤 (항상 최신 메시지로)
             console.scrollTop = console.scrollHeight;
         }};
         
