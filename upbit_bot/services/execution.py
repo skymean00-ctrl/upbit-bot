@@ -601,7 +601,10 @@ class ExecutionEngine:
             # 각 코인 분석 (최대 20개만 분석하여 시간 절약)
             markets_to_analyze = [m for m in markets[:20] if m not in open_markets]
             
-            for market in markets_to_analyze:
+            LOGGER.info(f"Starting AI analysis for {len(markets_to_analyze)} markets...")
+            
+            for idx, market in enumerate(markets_to_analyze, 1):
+                LOGGER.info(f"[{idx}/{len(markets_to_analyze)}] Analyzing {market}...")
                 try:
                     # 캔들 데이터 가져오기
                     raw = self.client.get_candles(market, unit=self.candle_unit, count=self.candle_count)
@@ -630,6 +633,8 @@ class ExecutionEngine:
                     if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
                         confidence = self.strategy.last_analysis.get('confidence', 0.0)
                         
+                        LOGGER.info(f"  {market}: {signal.value} (confidence: {confidence:.2%})")
+                        
                         # BUY 신호이고 신뢰도가 더 높으면 업데이트
                         if signal == StrategySignal.BUY and confidence > best_confidence:
                             best_market = market
@@ -638,24 +643,31 @@ class ExecutionEngine:
                             best_confidence = confidence
                             
                             LOGGER.info(
-                                f"Better signal found: {market} {signal.value} "
+                                f"  ✅ Better signal found: {market} {signal.value} "
                                 f"(confidence: {confidence:.2%})"
                             )
+                    else:
+                        LOGGER.warning(f"  {market}: No analysis result available")
                 
                 except Exception as e:
-                    LOGGER.debug(f"Failed to analyze {market}: {e}")
+                    LOGGER.warning(f"Failed to analyze {market}: {e}")
                     continue
             
             if best_market:
                 LOGGER.info(
-                    f"Selected market: {best_market} with {best_signal.value} "
+                    f"✅ Selected market: {best_market} with {best_signal.value} "
                     f"(confidence: {best_confidence:.2%})"
                 )
                 # 선택된 코인으로 market 업데이트
                 self.market = best_market
+                # 최종 분석 결과 저장 (best_market의 분석 결과)
+                if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
+                    # best_market의 분석 결과를 사용
+                    pass
                 return best_market, best_signal, best_candles
             else:
                 # 신호가 없으면 기존 market 유지
+                LOGGER.info("No BUY signal found, using default market")
                 candles = self._fetch_candles()
                 signal = self.strategy.on_candles(candles)
                 return self.market, signal, candles
@@ -673,17 +685,32 @@ class ExecutionEngine:
         LOGGER.info("Strategy %s signal: %s for %s", self.strategy.name, signal.value, selected_market)
         
         # AI 전략인 경우 분석 결과 저장
-        if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
-            self.last_ai_analysis = self.strategy.last_analysis.copy()
-            # 선택된 market 정보 추가
-            self.last_ai_analysis['selected_market'] = selected_market
-            # 타임스탬프 추가
-            self.last_ai_analysis['timestamp'] = datetime.now(UTC).isoformat()
-            # signal을 문자열로 변환 (StrategySignal enum -> string)
-            if hasattr(self.last_ai_analysis.get('signal'), 'value'):
-                self.last_ai_analysis['signal'] = self.last_ai_analysis['signal'].value
-            elif hasattr(self.last_ai_analysis.get('signal'), 'name'):
-                self.last_ai_analysis['signal'] = self.last_ai_analysis['signal'].name
+        if self.strategy.name == "ai_market_analyzer":
+            # AI 분석 결과가 있으면 저장
+            if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
+                self.last_ai_analysis = self.strategy.last_analysis.copy()
+                # 선택된 market 정보 추가
+                self.last_ai_analysis['selected_market'] = selected_market
+                # 타임스탬프 추가
+                self.last_ai_analysis['timestamp'] = datetime.now(UTC).isoformat()
+                # signal을 문자열로 변환 (StrategySignal enum -> string)
+                if hasattr(self.last_ai_analysis.get('signal'), 'value'):
+                    self.last_ai_analysis['signal'] = self.last_ai_analysis['signal'].value
+                elif hasattr(self.last_ai_analysis.get('signal'), 'name'):
+                    self.last_ai_analysis['signal'] = self.last_ai_analysis['signal'].name
+                
+                LOGGER.info(f"AI analysis saved: market={selected_market}, signal={self.last_ai_analysis.get('signal')}, confidence={self.last_ai_analysis.get('confidence', 0):.2%}")
+            else:
+                # AI 분석 결과가 없으면 빈 결과 저장 (콘솔에 표시하기 위해)
+                self.last_ai_analysis = {
+                    "market_data": {},
+                    "signal": signal.value if signal else "HOLD",
+                    "confidence": 0.0,
+                    "selected_market": selected_market,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "status": "no_analysis"
+                }
+                LOGGER.warning("AI analysis result not available, but strategy is ai_market_analyzer")
         
         self.last_signal = signal
         self.last_run_at = datetime.now(UTC)

@@ -239,13 +239,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # Get current account overview
                     account = controller.get_account_overview()
                     state = controller.get_state().as_dict()
-                    ai_analysis = controller.get_ai_analysis()  # AI 분석 결과 가져오기
+                    
+                    # AI 전략인 경우에만 AI 분석 결과 가져오기
+                    ai_analysis = None
+                    if state.get("strategy") == "ai_market_analyzer":
+                        ai_analysis = controller.get_ai_analysis()
+                        # 디버깅: AI 분석 결과가 있는지 확인
+                        if ai_analysis:
+                            logger.debug(f"AI analysis available: {ai_analysis.get('selected_market', 'N/A')}")
+                        else:
+                            logger.debug("AI analysis not available (strategy is ai_market_analyzer but no analysis result)")
                     
                     data = {
                         "timestamp": int(__import__("time").time() * 1000),
                         "balance": account,
                         "state": state,
-                        "ai_analysis": ai_analysis,  # AI 분석 결과 포함
+                        "ai_analysis": ai_analysis,  # AI 분석 결과 포함 (None일 수 있음)
                     }
                     
                     # Send SSE formatted data
@@ -1151,9 +1160,8 @@ def _render_dashboard(
                 }}
                 
                 // AI 분석 결과 표시
-                if (data.ai_analysis && data.ai_analysis.market_data) {{
+                if (data.ai_analysis) {{
                     const analysis = data.ai_analysis;
-                    const marketData = analysis.market_data;
                     const selectedMarket = analysis.selected_market || 'N/A';
                     let signal = analysis.signal || 'HOLD';
                     
@@ -1166,30 +1174,43 @@ def _render_dashboard(
                     }}
                     
                     const confidence = (analysis.confidence || 0) * 100;
+                    const marketData = analysis.market_data || {{}};
+                    const status = analysis.status;
                     
-                    // 신호에 따른 이모지와 색상
-                    let signalEmoji = '⚪';
-                    let signalColor = 'gray';
-                    if (signal === 'BUY' || signal.toUpperCase() === 'BUY') {{
-                        signalEmoji = '🟢';
-                        signalColor = 'green';
-                    }} else if (signal === 'SELL' || signal.toUpperCase() === 'SELL') {{
-                        signalEmoji = '🔴';
-                        signalColor = 'red';
-                    }} else {{
-                        signalEmoji = '⚪';
-                        signalColor = 'gray';
-                    }}
-                    
-                    // 메시지 생성 (최대 5줄 유지)
-                    const consoleEl = document.getElementById('ai-console-content');
-                    if (consoleEl) {{
-                        const timestamp = analysis.timestamp ? new Date(analysis.timestamp).toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}}) : new Date().toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
-                        // 코인 이름만 추출 (KRW-BTC -> BTC)
-                        const coinName = selectedMarket.replace('KRW-', '') || 'N/A';
-                        const message = `[${{timestamp}}] ${{coinName}} | ${{signalEmoji}} ${{signal}} (신뢰도: ${{confidence.toFixed(1)}}%) | 가격: ${{marketData.current_price?.toLocaleString('ko-KR') || 'N/A'}}원 | 변동성: ${{marketData.volatility?.toFixed(2) || 'N/A'}}% | 거래량: ${{marketData.volume_ratio?.toFixed(2) || 'N/A'}}x`;
+                    // 분석 결과가 없는 경우 (status가 no_analysis인 경우)
+                    if (status === 'no_analysis') {{
+                        const consoleEl = document.getElementById('ai-console-content');
+                        if (consoleEl) {{
+                            const timestamp = analysis.timestamp ? new Date(analysis.timestamp).toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}}) : new Date().toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
+                            const coinName = selectedMarket.replace('KRW-', '') || 'N/A';
+                            const message = `[${{timestamp}}] ${{coinName}} | ⚠️ AI 분석 결과 없음 (Ollama 연결 확인 필요)`;
+                            addAIConsoleMessage(message, 'yellow');
+                        }}
+                    }} else if (marketData && Object.keys(marketData).length > 0) {{
+                        // 신호에 따른 이모지와 색상
+                        let signalEmoji = '⚪';
+                        let signalColor = 'gray';
+                        if (signal === 'BUY' || signal.toUpperCase() === 'BUY') {{
+                            signalEmoji = '🟢';
+                            signalColor = 'green';
+                        }} else if (signal === 'SELL' || signal.toUpperCase() === 'SELL') {{
+                            signalEmoji = '🔴';
+                            signalColor = 'red';
+                        }} else {{
+                            signalEmoji = '⚪';
+                            signalColor = 'gray';
+                        }}
                         
-                        addAIConsoleMessage(message, signalColor);
+                        // 메시지 생성
+                        const consoleEl = document.getElementById('ai-console-content');
+                        if (consoleEl) {{
+                            const timestamp = analysis.timestamp ? new Date(analysis.timestamp).toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}}) : new Date().toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
+                            // 코인 이름만 추출 (KRW-BTC -> BTC)
+                            const coinName = selectedMarket.replace('KRW-', '') || 'N/A';
+                            const message = `[${{timestamp}}] ${{coinName}} | ${{signalEmoji}} ${{signal}} (신뢰도: ${{confidence.toFixed(1)}}%) | 가격: ${{marketData.current_price?.toLocaleString('ko-KR') || 'N/A'}}원 | 변동성: ${{marketData.volatility?.toFixed(2) || 'N/A'}}% | 거래량: ${{marketData.volume_ratio?.toFixed(2) || 'N/A'}}x`;
+                            
+                            addAIConsoleMessage(message, signalColor);
+                        }}
                     }}
                 }}
             }} catch (err) {{
