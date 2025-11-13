@@ -892,9 +892,9 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Statistics & Trade History (3 Columns) -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            <!-- Performance Analysis (Left) -->
+        <!-- Statistics & Trade History -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Performance Analysis -->
             <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">📊 성과 분석</h2>
                 <div id="statistics" class="space-y-2" style="height: 18em; overflow-y-auto;">
@@ -950,8 +950,8 @@ def _render_dashboard(
                 </div>
             </div>
 
-            <!-- Trade History (Right - 2 columns wide) -->
-            <div class="lg:col-span-2 card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <!-- Trade History -->
+            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">거래 내역</h2>
                 <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 18em;">
                     <table class="w-full text-xs">
