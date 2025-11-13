@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     max_position_pct: float = Field(5.0, env="UPBIT_MAX_POSITION_PCT")
     max_open_positions: int = Field(3, env="UPBIT_MAX_OPEN_POSITIONS")
     min_balance_krw: float = Field(10000.0, env="UPBIT_MIN_BALANCE_KRW")
+    order_amount_pct: float = Field(3.0, env="UPBIT_ORDER_AMOUNT_PCT")  # 1건당 매수 퍼센트 (기본값: 3%)
     slack_webhook_url: str | None = Field(None, env="UPBIT_SLACK_WEBHOOK_URL")
     telegram_bot_token: str | None = Field(None, env="UPBIT_TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str | None = Field(None, env="UPBIT_TELEGRAM_CHAT_ID")

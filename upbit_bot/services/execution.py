@@ -35,6 +35,7 @@ class ExecutionEngine:
         notifiers: Sequence[Notifier] | None = None,
         min_order_amount: float = 5000.0,
         trade_history_store: TradeHistoryStore | None = None,
+        order_amount_pct: float = 3.0,
     ) -> None:
         self.client = client
         self.strategy = strategy
@@ -49,7 +50,8 @@ class ExecutionEngine:
         self.notifiers = list(notifiers or [])
         self.position_price: float | None = None
         self.position_volume: float | None = None
-        self.min_order_amount = max(min_order_amount, 0.0)
+        self.min_order_amount = max(min_order_amount, 0.0)  # 호환성 유지 (deprecated)
+        self.order_amount_pct = max(0.1, min(order_amount_pct, 100.0))  # 0.1% ~ 100%
         self._stop_event: Event = Event()
         self._worker: Thread | None = None
         self.last_signal: StrategySignal | None = None
@@ -91,13 +93,35 @@ class ExecutionEngine:
         return candles
 
     def _determine_order_amount(self) -> float:
+        """
+        동적 주문 금액 결정.
+        
+        1. position_sizer가 있으면 사용
+        2. 아니면 현재 KRW 잔액의 order_amount_pct 사용
+        3. 둘 다 없으면 order_amount 사용 (후속 호환성)
+        """
         if self.position_sizer:
             stake = self.position_sizer.krw_stake()
-        elif self.order_amount is not None:
-            stake = self.order_amount
         else:
-            raise ValueError("order_amount must be provided when no position_sizer is configured.")
-        return max(stake, self.min_order_amount)
+            # 현재 KRW 잔액 조회
+            try:
+                account = self.client.get_accounts()
+                krw_account = next((a for a in account if a["currency"] == "KRW"), None)
+                krw_balance = float(krw_account["balance"]) if krw_account else 0.0
+                # 보유 원화의 order_amount_pct 계산
+                stake = krw_balance * (self.order_amount_pct / 100.0)
+                LOGGER.debug(
+                    f"Calculated order amount: {krw_balance} KRW * {self.order_amount_pct}% = {stake} KRW"
+                )
+            except Exception as e:
+                # 조회 실패 시 order_amount 사용
+                LOGGER.warning(f"Failed to get account balance: {e}")
+                if self.order_amount is not None:
+                    stake = self.order_amount
+                else:
+                    raise ValueError("Cannot determine order amount")
+        
+        return max(stake, 100.0)  # 최소 100 KRW
 
     def _notify(self, message: str, **kwargs) -> None:
         for notifier in self.notifiers:

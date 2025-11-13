@@ -167,7 +167,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # AI 전략일 때는 1분 주기로 분석, 다른 전략은 5분 주기
     candle_unit = 1 if settings.strategy.name == "ai_market_analyzer" else 5
     poll_interval = 60 if settings.strategy.name == "ai_market_analyzer" else 300
-    
+
     engine = ExecutionEngine(
         client=client,
         strategy=strategy,
@@ -178,8 +178,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         risk_manager=risk_manager,
         position_sizer=position_sizer,
         notifiers=_build_notifiers(settings),
-        min_order_amount=5000.0,
         trade_history_store=trade_history_store,
+        order_amount_pct=settings.order_amount_pct,
     )
     controller = TradingController(engine=engine, client=client)
     app.state.controller = controller
@@ -191,7 +191,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def index(request: Request) -> HTMLResponse:  # noqa: D401
         state = controller.get_state()
         account = controller.get_account_overview()
-        html = _render_dashboard(state, account, STRATEGY_INFO)
+        html = _render_dashboard(state, account, STRATEGY_INFO, settings)
         return HTMLResponse(content=html)
 
     @app.post("/start")
@@ -289,7 +289,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def update_settings(
         strategy: Optional[str] = Form(None),
         market: Optional[str] = Form(None),
-        min_order_amount: Optional[float] = Form(None),
+        order_amount_pct: Optional[float] = Form(None),
     ) -> JSONResponse:
         """설정 업데이트"""
         try:
@@ -317,11 +317,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 updates["market"] = market
                 LOGGER.info(f"Market updated to: {market}")
             
-            if min_order_amount is not None and min_order_amount >= 5000:
-                # 최소 주문 금액 업데이트
-                controller.engine.min_order_amount = min_order_amount
-                updates["min_order_amount"] = min_order_amount
-                LOGGER.info(f"Min order amount updated to: {min_order_amount}")
+            if order_amount_pct is not None and 0.1 <= order_amount_pct <= 100:
+                # 주문 금액 퍼센트 업데이트
+                settings.order_amount_pct = order_amount_pct
+                updates["order_amount_pct"] = order_amount_pct
+                LOGGER.info(f"Order amount percentage updated to: {order_amount_pct}%")
             
             return JSONResponse({
                 "success": True,
@@ -338,7 +338,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_info: dict[str, dict[str, str]]) -> str:
+def _render_dashboard(
+    state: TradingState,
+    account: dict[str, Any],
+    strategy_info: dict[str, dict[str, str]],
+    settings: Settings,
+) -> str:
     running_status = "running" if state.running else "stopped"
     running_color = "green" if state.running else "red"
     dry_run_color = "blue" if state.dry_run else "orange"
@@ -578,20 +583,21 @@ def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_inf
                         </select>
                     </div>
                     <div>
-                        <label for="min-order-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            Min Order Amount (KRW)
+                        <label for="order-pct-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            💰 1건당 매수 퍼센트 (%)
                         </label>
                         <input 
                             type="number" 
-                            id="min-order-input" 
-                            name="min_order_amount" 
-                            value="{int(state.min_order_amount)}"
-                            min="5000" 
-                            step="1000"
+                            id="order-pct-input" 
+                            name="order_amount_pct" 
+                            value="{settings.order_amount_pct}"
+                            min="0.1" 
+                            max="100"
+                            step="0.1"
                             class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             required
                         />
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">최소 5,000 KRW 이상</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">보유 원화의 %를 1건당 매수 금액으로 사용 (기본값: 3%)</p>
                     </div>
                     <button 
                         type="submit" 
@@ -615,8 +621,8 @@ def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_inf
                         <span class="font-semibold text-gray-900 dark:text-white">{state.strategy}</span>
                     </div>
                     <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Min Order</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{state.min_order_amount:,.0f} KRW</span>
+                        <span class="text-gray-600 dark:text-gray-400">💰 Order Size</span>
+                        <span class="font-semibold text-gray-900 dark:text-white">{settings.order_amount_pct}%</span>
                     </div>
                     <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
                         <span class="text-gray-600 dark:text-gray-400">Last Signal</span>
@@ -637,7 +643,7 @@ def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_inf
                 <!-- 서버 상태 표시 -->
                 <div class="mb-6 p-4 rounded-lg bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 border border-blue-200 dark:border-blue-800">
                     <div class="flex items-center justify-between">
-                        <div>
+    <div>
                             <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">서버 상태</p>
                             <div class="flex items-center gap-2">
                                 <div class="w-3 h-3 rounded-full bg-green-500 animate-pulse" id="server-status-dot"></div>
@@ -649,7 +655,7 @@ def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_inf
                             <span class="inline-block px-3 py-1 rounded-full text-sm font-semibold" id="trading-mode-badge">Dry-run</span>
                         </div>
                     </div>
-                </div>
+    </div>
                 
                 <div class="space-y-4">
                     <form method="post" action="/start" class="space-y-3">
@@ -658,19 +664,19 @@ def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_inf
                             <select id="mode" name="mode" class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                                 <option value="dry" {'selected' if state.dry_run else ''}>🟢 Dry-run (시뮬레이션 - 실제 거래 없음)</option>
                                 <option value="live" {'selected' if not state.dry_run else ''}>🔴 Live (실제 거래 - 주의!)</option>
-                            </select>
+                </select>
                         </div>
                         <button type="submit" class="w-full bg-green-600 hover:bg-green-700 active:bg-green-800 text-white font-bold py-3 px-6 rounded-lg transition duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2">
                             <span>▶️</span>
                             <span>서버 시작</span>
                         </button>
-                    </form>
-                    <form method="post" action="/stop">
+            </form>
+            <form method="post" action="/stop">
                         <button type="submit" class="w-full bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-bold py-3 px-6 rounded-lg transition duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2">
                             <span>⏹️</span>
                             <span>서버 중지</span>
                         </button>
-                    </form>
+            </form>
                     
                     <!-- 추가 정보 -->
                     <div class="grid grid-cols-2 gap-2 pt-4 border-t border-gray-200 dark:border-gray-700 text-xs">
@@ -709,15 +715,15 @@ def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_inf
                 ''' if account_error else ''}
                 <div class="overflow-x-auto">
                     <table class="w-full text-sm">
-                        <thead>
+                <thead>
                             <tr class="border-b border-gray-200 dark:border-gray-700">
                                 <th class="text-left py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Currency</th>
                                 <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Balance</th>
                                 <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Current Price</th>
                                 <th class="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Valuation (KRW)</th>
                             </tr>
-                        </thead>
-                        <tbody>
+                </thead>
+                <tbody>
                             {''.join([f'''
                             <tr class="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
                                 <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')}</td>
@@ -759,8 +765,8 @@ def _render_dashboard(state: TradingState, account: dict[str, Any], strategy_inf
                         </thead>
                         <tbody id="trade-history-body">
                             <tr><td colspan="5" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">로딩 중...</td></tr>
-                        </tbody>
-                    </table>
+                </tbody>
+            </table>
                 </div>
             </div>
 
