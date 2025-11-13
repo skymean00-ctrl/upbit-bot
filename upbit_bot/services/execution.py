@@ -213,7 +213,7 @@ class ExecutionEngine:
                 order = self.client.place_order(
                     market=self.market,
                     side="bid",
-                    amount=str(int(buy_amount)),
+                    price=str(int(buy_amount)),
                     ord_type="market",
                 )
                 
