@@ -650,9 +650,9 @@ def _render_dashboard(
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Settings Card -->
-            <div class="lg:col-span-1 card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <button id="settings-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
                     <h2 class="text-xl font-bold text-gray-900 dark:text-white">⚙️ 설정</h2>
                     <span class="text-2xl" id="settings-icon">▼</span>
@@ -743,7 +743,7 @@ def _render_dashboard(
             </div>
             
             <!-- Status Card -->
-            <div class="lg:col-span-1 card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <button id="status-toggle" class="w-full flex items-center justify-between py-2 hover:opacity-80 transition" type="button">
                     <h2 class="text-xl font-bold text-gray-900 dark:text-white">📊 상태</h2>
                     <span class="text-2xl" id="status-icon">▼</span>
@@ -772,9 +772,12 @@ def _render_dashboard(
                     {f'<div class="flex justify-between items-center py-2"><span class="text-red-600 dark:text-red-400">Last Error</span><span class="font-semibold text-red-600 dark:text-red-400 text-sm">{state.last_error}</span></div>' if state.last_error else ''}
                 </div>
             </div>
+        </div>
 
+        <!-- Server Control & Account -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Controls Card -->
-            <div class="lg:col-span-1 card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">🎮 서버 제어</h2>
                 
                 <!-- 서버 상태 표시 -->
@@ -835,7 +838,7 @@ def _render_dashboard(
                 </div>
             
             <!-- Account Snapshot -->
-            <div class="lg:col-span-1 card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <div class="card bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">💼 자산 현황</h2>
                 {f'''
                 <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
