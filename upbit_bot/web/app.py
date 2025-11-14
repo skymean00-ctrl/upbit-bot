@@ -1455,35 +1455,51 @@ def _render_dashboard(
         // 스트림 데이터로 UI 업데이트
         function updateUIWithStreamData(data) {{
             try {{
-                // Ollama 연결 상태 업데이트
-                if (data.ollama_status) {{
+                // Ollama 연결 상태 업데이트 (AI 전략인 경우만)
+                const aiStrategies = ['ai_market_analyzer', 'ai_market_analyzer_high_risk'];
+                const isAIStrategy = data.state && aiStrategies.includes(data.state.strategy);
+                
+                if (isAIStrategy) {{
                     const statusBadge = document.getElementById('ollama-status-badge');
                     const statusIcon = document.getElementById('ollama-status-icon');
                     const statusText = document.getElementById('ollama-status-text');
                     
                     if (statusBadge && statusIcon && statusText) {{
-                        const connected = data.ollama_status.connected || false;
-                        const error = data.ollama_status.error || null;
-                        const model = data.ollama_status.model || 'N/A';
-                        const modelAvailable = data.ollama_status.model_available || false;
-                        
-                        if (connected && modelAvailable) {{
-                            // 연결됨 + 모델 사용 가능
-                            statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-900/30 text-green-400 border border-green-600/50';
-                            statusIcon.className = 'w-2 h-2 rounded-full bg-green-400 animate-pulse';
-                            statusText.textContent = '✅ Ollama 연결됨 (' + model + ')';
-                        }} else if (connected && !modelAvailable) {{
-                            // 연결됨 + 모델 없음
-                            statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-900/30 text-yellow-400 border border-yellow-600/50';
-                            statusIcon.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
-                            statusText.textContent = '⚠️ Ollama 연결됨 (모델 ' + model + ' 없음)';
+                        if (data.ollama_status) {{
+                            const connected = data.ollama_status.connected || false;
+                            const error = data.ollama_status.error || null;
+                            const model = data.ollama_status.model || 'N/A';
+                            const modelAvailable = data.ollama_status.model_available || false;
+                            
+                            if (connected && modelAvailable) {{
+                                // 연결됨 + 모델 사용 가능
+                                statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-900/30 text-green-400 border border-green-600/50';
+                                statusIcon.className = 'w-2 h-2 rounded-full bg-green-400 animate-pulse';
+                                statusText.textContent = '✅ Ollama 연결됨 (' + model + ')';
+                            }} else if (connected && !modelAvailable) {{
+                                // 연결됨 + 모델 없음
+                                statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-900/30 text-yellow-400 border border-yellow-600/50';
+                                statusIcon.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
+                                statusText.textContent = '⚠️ Ollama 연결됨 (모델 ' + model + ' 없음)';
+                            }} else {{
+                                // 연결 안됨
+                                statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-900/30 text-red-400 border border-red-600/50';
+                                statusIcon.className = 'w-2 h-2 rounded-full bg-red-400';
+                                const errorMsg = error ? ': ' + error : '';
+                                statusText.textContent = '❌ Ollama 연결 실패' + errorMsg;
+                            }}
                         }} else {{
-                            // 연결 안됨
-                            statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-900/30 text-red-400 border border-red-600/50';
-                            statusIcon.className = 'w-2 h-2 rounded-full bg-red-400';
-                            const errorMsg = error ? ': ' + error : '';
-                            statusText.textContent = '❌ Ollama 연결 실패' + errorMsg;
+                            // Ollama 상태 정보가 없으면 확인 중 상태 유지
+                            statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-700/50 text-gray-400 border border-gray-600';
+                            statusIcon.className = 'w-2 h-2 rounded-full bg-gray-500 animate-pulse';
+                            statusText.textContent = 'Ollama 확인 중...';
                         }}
+                    }}
+                }} else {{
+                    // AI 전략이 아니면 Ollama 상태 배지 숨기기
+                    const statusBadge = document.getElementById('ollama-status-badge');
+                    if (statusBadge) {{
+                        statusBadge.style.display = 'none';
                     }}
                 }}
                 
@@ -1567,7 +1583,8 @@ def _render_dashboard(
                 }}
                 
                 // AI 분석 결과 표시 (AI 전략이면 항상 표시)
-                if (data.state && data.state.strategy === 'ai_market_analyzer') {{
+                const aiStrategies = ['ai_market_analyzer', 'ai_market_analyzer_high_risk'];
+                if (data.state && aiStrategies.includes(data.state.strategy)) {{
                     // AI 전략이면 항상 분석 결과 표시 (결과가 없어도 상태 표시)
                 if (data.ai_analysis) {{
                     const analysis = data.ai_analysis;
