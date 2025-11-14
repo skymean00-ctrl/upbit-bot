@@ -584,7 +584,9 @@ class ExecutionEngine:
         Returns:
             (선택된 market, signal, candles)
         """
-        if self.strategy.name != "ai_market_analyzer":
+        # AI 전략인지 확인 (기본 AI 전략 또는 고위험 AI 전략)
+        ai_strategies = ["ai_market_analyzer", "ai_market_analyzer_high_risk"]
+        if self.strategy.name not in ai_strategies:
             # AI 전략이 아니면 기존 방식
             candles = self._fetch_candles()
             signal = self.strategy.on_candles(candles)
@@ -699,8 +701,9 @@ class ExecutionEngine:
         else:
             LOGGER.info("⚪ HOLD SIGNAL: Strategy %s -> HOLD for %s", self.strategy.name, selected_market)
         
-        # AI 전략인 경우 분석 결과 저장
-        if self.strategy.name == "ai_market_analyzer":
+        # AI 전략인 경우 분석 결과 저장 (기본 AI 전략 또는 고위험 AI 전략)
+        ai_strategies = ["ai_market_analyzer", "ai_market_analyzer_high_risk"]
+        if self.strategy.name in ai_strategies:
             # AI 분석 결과가 있으면 저장
             if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
                 self.last_ai_analysis = self.strategy.last_analysis.copy()
