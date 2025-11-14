@@ -993,10 +993,17 @@ def _render_dashboard(
         <!-- AI Analysis Console Window (Always Visible - Scrollable) -->
         <div class="mb-6 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 dark:from-gray-950 dark:via-gray-900 dark:to-black rounded-2xl shadow-2xl border border-gray-700 dark:border-gray-800 overflow-hidden">
             <div class="bg-gradient-to-r from-gray-800 to-gray-900 dark:from-gray-900 dark:to-gray-800 px-5 py-4 border-b border-gray-700 dark:border-gray-800 flex items-center justify-between">
-                <h3 class="text-base font-bold text-green-400 flex items-center gap-3">
-                    <span class="text-2xl animate-pulse">🤖</span>
-                    <span>AI 분석 콘솔</span>
-                </h3>
+                <div class="flex items-center gap-4">
+                    <h3 class="text-base font-bold text-green-400 flex items-center gap-3">
+                        <span class="text-2xl animate-pulse">🤖</span>
+                        <span>AI 분석 콘솔</span>
+                    </h3>
+                    <!-- Ollama 연결 상태 표시 -->
+                    <div id="ollama-status-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-700/50 text-gray-400 border border-gray-600">
+                        <span id="ollama-status-icon" class="w-2 h-2 rounded-full bg-gray-500 animate-pulse"></span>
+                        <span id="ollama-status-text">Ollama 확인 중...</span>
+                    </div>
+                </div>
                 <button id="console-clear-btn" class="px-3 py-1.5 text-xs font-semibold bg-gray-700 hover:bg-gray-600 active:bg-gray-500 text-gray-300 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg">
                     Clear
                 </button>
@@ -1448,6 +1455,38 @@ def _render_dashboard(
         // 스트림 데이터로 UI 업데이트
         function updateUIWithStreamData(data) {{
             try {{
+                // Ollama 연결 상태 업데이트
+                if (data.ollama_status) {{
+                    const statusBadge = document.getElementById('ollama-status-badge');
+                    const statusIcon = document.getElementById('ollama-status-icon');
+                    const statusText = document.getElementById('ollama-status-text');
+                    
+                    if (statusBadge && statusIcon && statusText) {{
+                        const connected = data.ollama_status.connected;
+                        const error = data.ollama_status.error;
+                        const model = data.ollama_status.model || 'N/A';
+                        const modelAvailable = data.ollama_status.model_available;
+                        
+                        if (connected && modelAvailable) {{
+                            // 연결됨 + 모델 사용 가능
+                            statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-900/30 text-green-400 border border-green-600/50';
+                            statusIcon.className = 'w-2 h-2 rounded-full bg-green-400 animate-pulse';
+                            statusText.textContent = `✅ Ollama 연결됨 (${model})`;
+                        }} else if (connected && !modelAvailable) {{
+                            // 연결됨 + 모델 없음
+                            statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-900/30 text-yellow-400 border border-yellow-600/50';
+                            statusIcon.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
+                            statusText.textContent = `⚠️ Ollama 연결됨 (모델 ${model} 없음)`;
+                        }} else {{
+                            // 연결 안됨
+                            statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-900/30 text-red-400 border border-red-600/50';
+                            statusIcon.className = 'w-2 h-2 rounded-full bg-red-400';
+                            const errorMsg = error ? `: ${error}` : '';
+                            statusText.textContent = `❌ Ollama 연결 실패${errorMsg}`;
+                        }}
+                    }}
+                }}
+                
                 // 잔액 업데이트 (실시간)
                 if (data.balance) {{
                     // KRW 잔액
