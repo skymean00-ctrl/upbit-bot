@@ -110,6 +110,55 @@ class UpbitClient:
                 "KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-ADA", "KRW-DOT",
                 "KRW-LINK", "KRW-LTC", "KRW-BCH", "KRW-EOS", "KRW-TRX"
             ]
+    
+    def get_top_volume_markets(self, limit: int = 10) -> list[str]:
+        """거래량 상위 N개 KRW 마켓 가져오기"""
+        try:
+            # 모든 KRW 마켓 가져오기
+            all_markets = self.get_krw_markets()
+            
+            # 거래량 정보를 가져오기 위해 티커 조회 (한 번에 최대 100개까지 가능)
+            # 여러 번 나눠서 조회
+            market_volumes: list[tuple[str, float]] = []
+            
+            # 티커를 여러 번 나눠서 조회 (한 번에 최대 100개)
+            batch_size = 100
+            for i in range(0, len(all_markets), batch_size):
+                batch = all_markets[i:i + batch_size]
+                try:
+                    # 티커 조회 (인증 불필요)
+                    url = f"{self.REST_ENDPOINT}/ticker"
+                    params = {"markets": ",".join(batch)}
+                    response = self.session.request("GET", url, params=params, timeout=self.timeout)
+                    if response.status_code == 200:
+                        tickers = response.json()
+                        for ticker in tickers:
+                            market = ticker.get("market")
+                            # 24시간 누적 거래량 (acc_trade_volume_24h)
+                            volume = float(ticker.get("acc_trade_volume_24h", 0))
+                            market_volumes.append((market, volume))
+                    else:
+                        LOGGER.warning(f"Failed to get tickers for batch {i//batch_size + 1}: {response.status_code}")
+                except Exception as e:
+                    LOGGER.warning(f"Error fetching tickers for batch {i//batch_size + 1}: {e}")
+                    continue
+            
+            # 거래량 기준으로 정렬 (내림차순)
+            market_volumes.sort(key=lambda x: x[1], reverse=True)
+            
+            # 상위 N개만 반환
+            top_markets = [market for market, volume in market_volumes[:limit]]
+            
+            LOGGER.info(f"Selected top {len(top_markets)} markets by volume: {top_markets}")
+            return top_markets
+            
+        except Exception as e:
+            LOGGER.error(f"Failed to get top volume markets: {e}")
+            # 기본 코인 목록 반환
+            return [
+                "KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-ADA", "KRW-DOT",
+                "KRW-LINK", "KRW-LTC", "KRW-BCH", "KRW-EOS", "KRW-TRX"
+            ][:limit]
 
     def place_order(
         self,

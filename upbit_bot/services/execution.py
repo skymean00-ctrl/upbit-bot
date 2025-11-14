@@ -592,9 +592,9 @@ class ExecutionEngine:
         
         # AI 전략: 여러 코인 분석
         try:
-            # 거래 가능한 코인 목록 가져오기
-            markets = self.client.get_krw_markets()
-            LOGGER.info(f"Analyzing {len(markets)} markets for AI strategy...")
+            # 거래량 상위 10개 코인 가져오기
+            markets = self.client.get_top_volume_markets(limit=10)
+            LOGGER.info(f"Selected top 10 markets by volume for AI strategy analysis: {markets}")
             
             best_market: str | None = None
             best_signal: StrategySignal = StrategySignal.HOLD
@@ -606,8 +606,8 @@ class ExecutionEngine:
             portfolio = self.get_portfolio_status()
             open_markets = {pos.get("market") for pos in portfolio.get("open_positions", [])}
             
-            # 각 코인 분석 (최대 10개만 분석하여 시간 절약)
-            markets_to_analyze = [m for m in markets[:10] if m not in open_markets]
+            # 거래량 상위 10개 중에서 포지션이 없는 코인만 분석
+            markets_to_analyze = [m for m in markets if m not in open_markets]
             
             LOGGER.info(f"Starting AI analysis for {len(markets_to_analyze)} markets...")
             
