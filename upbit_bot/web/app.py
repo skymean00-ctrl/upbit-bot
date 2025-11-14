@@ -356,7 +356,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     
                     # AI 전략이면 항상 AI 분석 결과 가져오기 (SSE 스트림에서 직접 실행)
                     ai_analysis = None
-                    if state.get("strategy") == "ai_market_analyzer":
+                    ai_strategies = ["ai_market_analyzer", "ai_market_analyzer_high_risk"]
+                    if state.get("strategy") in ai_strategies:
                         # 먼저 기존 분석 결과 확인
                         ai_analysis = controller.get_ai_analysis()
                         
