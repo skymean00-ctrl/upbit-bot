@@ -1462,27 +1462,27 @@ def _render_dashboard(
                     const statusText = document.getElementById('ollama-status-text');
                     
                     if (statusBadge && statusIcon && statusText) {{
-                        const connected = data.ollama_status.connected;
-                        const error = data.ollama_status.error;
+                        const connected = data.ollama_status.connected || false;
+                        const error = data.ollama_status.error || null;
                         const model = data.ollama_status.model || 'N/A';
-                        const modelAvailable = data.ollama_status.model_available;
+                        const modelAvailable = data.ollama_status.model_available || false;
                         
                         if (connected && modelAvailable) {{
                             // 연결됨 + 모델 사용 가능
                             statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-900/30 text-green-400 border border-green-600/50';
                             statusIcon.className = 'w-2 h-2 rounded-full bg-green-400 animate-pulse';
-                            statusText.textContent = `✅ Ollama 연결됨 (${model})`;
+                            statusText.textContent = '✅ Ollama 연결됨 (' + model + ')';
                         }} else if (connected && !modelAvailable) {{
                             // 연결됨 + 모델 없음
                             statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-900/30 text-yellow-400 border border-yellow-600/50';
                             statusIcon.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
-                            statusText.textContent = `⚠️ Ollama 연결됨 (모델 ${model} 없음)`;
+                            statusText.textContent = '⚠️ Ollama 연결됨 (모델 ' + model + ' 없음)';
                         }} else {{
                             // 연결 안됨
                             statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-900/30 text-red-400 border border-red-600/50';
                             statusIcon.className = 'w-2 h-2 rounded-full bg-red-400';
-                            const errorMsg = error ? `: ${error}` : '';
-                            statusText.textContent = `❌ Ollama 연결 실패${errorMsg}`;
+                            const errorMsg = error ? ': ' + error : '';
+                            statusText.textContent = '❌ Ollama 연결 실패' + errorMsg;
                         }}
                     }}
                 }}
