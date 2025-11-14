@@ -354,6 +354,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     account["total_crypto_value"] = total_crypto_value
                     account["total_balance"] = krw_balance + total_crypto_value
                     
+                    # Ollama 상태는 항상 가져오기 (서버 시작/중지와 상관없이)
+                    ollama_status_data = controller.get_ollama_status()
+                    
                     # AI 전략이면 항상 AI 분석 결과 가져오기 (SSE 스트림에서 직접 실행)
                     ai_analysis = None
                     ai_strategies = ["ai_market_analyzer", "ai_market_analyzer_high_risk"]
@@ -578,6 +581,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "balance": account,
                         "state": state,
                         "ai_analysis": ai_analysis,  # AI 전략이면 항상 포함
+                        "ollama_status": ollama_status_data,  # Ollama 상태는 항상 포함 (서버 시작/중지와 상관없이)
                         "statistics": statistics_data,  # 통계 데이터 포함
                         "recent_trades": recent_trades,  # 최근 거래 내역 포함
                     }
@@ -719,10 +723,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         strategy: Optional[str] = Form(None),
         market: Optional[str] = Form(None),
         order_amount_pct: Optional[float] = Form(None),
+        mode: Optional[str] = Form(None),
     ) -> JSONResponse:
         """설정 업데이트"""
         try:
             updates: dict[str, Any] = {}
+            
+            # 거래 모드 업데이트 (dry-run/live)
+            if mode is not None:
+                if mode in ("dry", "live"):
+                    controller.engine.dry_run = mode != "live"
+                    updates["mode"] = mode
+                    updates["dry_run"] = controller.engine.dry_run
+                    LOGGER.info(f"Trading mode updated to: {mode} (dry_run={controller.engine.dry_run})")
             
             if strategy and strategy in AVAILABLE_STRATEGIES:
                 # 전략 업데이트
@@ -1456,16 +1469,19 @@ def _render_dashboard(
         // 스트림 데이터로 UI 업데이트
         function updateUIWithStreamData(data) {{
             try {{
-                // Ollama 연결 상태 업데이트 (AI 전략인 경우만)
-                const aiStrategies = ['ai_market_analyzer', 'ai_market_analyzer_high_risk'];
-                const isAIStrategy = data.state && aiStrategies.includes(data.state.strategy);
+                // Ollama 연결 상태 업데이트 (항상 표시 - 서버 시작/중지와 상관없이)
+                const statusBadge = document.getElementById('ollama-status-badge');
+                const statusIcon = document.getElementById('ollama-status-icon');
+                const statusText = document.getElementById('ollama-status-text');
                 
-                if (isAIStrategy) {{
-                    const statusBadge = document.getElementById('ollama-status-badge');
-                    const statusIcon = document.getElementById('ollama-status-icon');
-                    const statusText = document.getElementById('ollama-status-text');
+                if (statusBadge && statusIcon && statusText) {{
+                    // AI 전략인지 확인 (AI 전략이 아니면 배지 숨기기)
+                    const aiStrategies = ['ai_market_analyzer', 'ai_market_analyzer_high_risk'];
+                    const isAIStrategy = data.state && aiStrategies.includes(data.state.strategy);
                     
-                    if (statusBadge && statusIcon && statusText) {{
+                    if (isAIStrategy) {{
+                        statusBadge.style.display = 'flex';
+                        
                         if (data.ollama_status) {{
                             const connected = data.ollama_status.connected || false;
                             const error = data.ollama_status.error || null;
@@ -1495,11 +1511,8 @@ def _render_dashboard(
                             statusIcon.className = 'w-2 h-2 rounded-full bg-gray-500 animate-pulse';
                             statusText.textContent = 'Ollama 확인 중...';
                         }}
-                    }}
-                }} else {{
-                    // AI 전략이 아니면 Ollama 상태 배지 숨기기
-                    const statusBadge = document.getElementById('ollama-status-badge');
-                    if (statusBadge) {{
+                    }} else {{
+                        // AI 전략이 아니면 Ollama 상태 배지 숨기기
                         statusBadge.style.display = 'none';
                     }}
                 }}
@@ -2386,6 +2399,10 @@ def _render_dashboard(
                     const result = await response.json();
                     
                     if (result.success) {{
+                        // 이전 메시지 제거 (있다면)
+                        const existingMessages = settingsForm.querySelectorAll('.mb-4.p-3.bg-green-50, .mb-4.p-3.bg-red-50');
+                        existingMessages.forEach(msg => msg.remove());
+                        
                         // 성공 메시지 표시
                         const messageDiv = document.createElement('div');
                         messageDiv.className = 'mb-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg';
