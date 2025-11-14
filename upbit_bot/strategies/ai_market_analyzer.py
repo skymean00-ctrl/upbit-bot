@@ -15,8 +15,12 @@ from .base import Candle, Strategy, StrategySignal
 LOGGER = logging.getLogger(__name__)
 
 # Ollama 설정
-OLLAMA_BASE_URL = "http://100.98.189.30:11434"
-OLLAMA_MODEL = "qwen2.5-coder:7b"  # 빠르고 가벼운 모델
+import os
+# 기존 서버 연결 (100.98.189.30) 사용, 환경 변수로 덮어쓰기 가능
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://100.98.189.30:11434")  # 기존 서버 기본값
+# 모델 고정: qwen2.5-coder:7b (속도: 2.37초, 확실성: 높음, JSON 형식 올바름)
+# llama3.1:8b (15.57초 - 너무 느림), deepseek-r1:7b (응답 실패)
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")  # 가장 빠르고 확실한 모델 고정
 
 
 class AIMarketAnalyzer(Strategy):
@@ -118,6 +122,7 @@ class AIMarketAnalyzer(Strategy):
 {{"signal": "BUY|SELL|HOLD", "confidence": 0.0~1.0, "reason": "이유"}}"""
 
         try:
+            LOGGER.debug(f"Ollama 분석 요청 시작: {OLLAMA_BASE_URL}/api/generate")
             response = requests.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json={
@@ -130,11 +135,18 @@ class AIMarketAnalyzer(Strategy):
             )
 
             if response.status_code != 200:
-                LOGGER.warning(f"Ollama 오류: {response.status_code}")
+                LOGGER.error(f"Ollama API 오류: HTTP {response.status_code}")
+                LOGGER.error(f"응답 내용: {response.text[:200]}")
                 return StrategySignal.HOLD, 0.0
 
             result = response.json()
             response_text = result.get("response", "")
+            
+            if not response_text:
+                LOGGER.warning("Ollama 응답이 비어있음")
+                return StrategySignal.HOLD, 0.0
+            
+            LOGGER.debug(f"Ollama 응답 수신: {len(response_text)} 문자")
 
             # JSON 파싱 시도
             try:
@@ -168,29 +180,53 @@ class AIMarketAnalyzer(Strategy):
 
             return StrategySignal.HOLD, 0.0
 
+        except requests.exceptions.Timeout:
+            LOGGER.error(f"Ollama 요청 시간 초과 (45초) - 서버가 너무 느리거나 모델이 응답하지 않음")
+            return StrategySignal.HOLD, 0.0
+        except requests.exceptions.ConnectionError as e:
+            LOGGER.error(f"Ollama 연결 실패: {e} - 서버가 실행 중인지 확인: {OLLAMA_BASE_URL}")
+            return StrategySignal.HOLD, 0.0
         except requests.exceptions.RequestException as e:
-            LOGGER.error(f"Ollama 요청 실패: {e}")
+            LOGGER.error(f"Ollama 요청 실패: {type(e).__name__}: {e}")
+            return StrategySignal.HOLD, 0.0
+        except Exception as e:
+            LOGGER.error(f"Ollama 처리 중 예기치 않은 오류: {type(e).__name__}: {e}", exc_info=True)
             return StrategySignal.HOLD, 0.0
 
     def on_candles(self, candles: Iterable[Candle]) -> StrategySignal:
         """생성된 캔들을 기반으로 신호 생성."""
         candles_list = list(candles)
         if len(candles_list) < 5:
+            # 최소 데이터가 없어도 기본 분석 결과 저장 (콘솔 표시용)
+            self.last_analysis = {
+                "market_data": {},
+                "signal": StrategySignal.HOLD,
+                "confidence": 0.0,
+                "status": "insufficient_data"
+            }
             return StrategySignal.HOLD
 
         # 기술적 지표 계산
         market_data = self._calculate_technical_indicators(candles_list)
         if not market_data:
+            # 기술적 지표 계산 실패 시에도 기본 결과 저장
+            self.last_analysis = {
+                "market_data": {},
+                "signal": StrategySignal.HOLD,
+                "confidence": 0.0,
+                "status": "calculation_failed"
+            }
             return StrategySignal.HOLD
 
         # AI 분석
         signal, confidence = self._query_ollama(market_data)
 
-        # 결과 저장 (로깅용)
+        # 결과 저장 (로깅용) - 항상 저장하여 콘솔에 표시 가능하도록
         self.last_analysis = {
             "market_data": market_data,
             "signal": signal,
             "confidence": confidence,
+            "status": "completed"
         }
 
         LOGGER.info(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .ai_market_analyzer import AIMarketAnalyzer
+from .ai_market_analyzer_high_risk import AIMarketAnalyzerHighRisk
 from .base import Strategy
 from .bb_squeeze import BBSqueezeStrategy
 from .ma_crossover import MovingAverageCrossoverStrategy
@@ -24,6 +25,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     SupportResistanceStrategy.name: SupportResistanceStrategy,
     VolumeProfileStrategy.name: VolumeProfileStrategy,
     AIMarketAnalyzer.name: AIMarketAnalyzer,
+    AIMarketAnalyzerHighRisk.name: AIMarketAnalyzerHighRisk,
 }
 
 

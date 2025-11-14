@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
+from threading import Thread
 from typing import Any, AsyncGenerator, Optional
 
 import requests
@@ -16,7 +18,7 @@ from upbit_bot.core import UpbitClient
 from upbit_bot.data.performance_tracker import PerformanceTracker
 from upbit_bot.data.trade_history import TradeHistoryStore
 from upbit_bot.services import ExecutionEngine, PositionSizer, RiskConfig, RiskManager
-from upbit_bot.strategies import get_strategy
+from upbit_bot.strategies import Candle, get_strategy
 from upbit_bot.utils import ConsoleNotifier, SlackNotifier, TelegramNotifier
 
 from .controller import TradingController, TradingState
@@ -78,6 +80,12 @@ STRATEGY_INFO = {
         "description": "로컬 Ollama AI가 실시간 시장 데이터(이동평균, 변동성, 거래량)를 분석하여 신뢰도 기반 매매 신호 생성. 신경망 기반 인지로 동적 시장 판단",
         "risk": "낮음",
         "best_for": "모든 시장 상황",
+    },
+    "ai_market_analyzer_high_risk": {
+        "name": "🚀 AI 시장 분석 - 고위험",
+        "description": "AI 시장 분석을 베이스로 한 고위험 고수익 전략. 낮은 신뢰도 임계값(0.4)으로 더 많은 매매 신호 생성, 빠른 진입/퇴출로 단기 수익 추구. 공격적 매매 원칙 적용",
+        "risk": "높음",
+        "best_for": "변동성이 높고 공격적 매매를 원하는 경우",
     },
 }
 
@@ -147,6 +155,11 @@ def _build_balance_fetcher(client: UpbitClient) -> Any:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
+    
+    # 기본 전략을 AI 시장 분석으로 설정
+    if settings.strategy.name != "ai_market_analyzer":
+        from upbit_bot.config.settings import StrategyConfig
+        settings.strategy = StrategyConfig(name="ai_market_analyzer", config={})
 
     client = UpbitClient(settings.access_key, settings.secret_key)
     strategy = _build_strategy(settings)
@@ -166,8 +179,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     performance_tracker = PerformanceTracker()
     
     # AI 전략일 때는 1분 주기로 분석, 다른 전략은 5분 주기
-    candle_unit = 1 if settings.strategy.name == "ai_market_analyzer" else 5
-    poll_interval = 60 if settings.strategy.name == "ai_market_analyzer" else 300
+    is_ai_strategy = settings.strategy.name in ("ai_market_analyzer", "ai_market_analyzer_high_risk")
+    candle_unit = 1 if is_ai_strategy else 5
+    poll_interval = 60 if is_ai_strategy else 300
 
     engine = ExecutionEngine(
         client=client,
@@ -187,6 +201,73 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.trade_history_store = trade_history_store
     app.state.performance_tracker = performance_tracker
+    
+    # AI 전략 백그라운드 분석 태스크 (서버 시작 없이도 주기적으로 분석)
+    def background_ai_analysis() -> None:
+        """백그라운드에서 주기적으로 AI 분석 실행 (서버 시작 여부와 무관)"""
+        import time
+        while True:
+            try:
+                # AI 전략인 경우에만 실행
+                current_settings = load_settings()
+                if current_settings.strategy.name in ("ai_market_analyzer", "ai_market_analyzer_high_risk"):
+                    # engine 참조를 지역 변수로 가져오기 (스레드 안전)
+                    try:
+                        # app.state에 안전하게 접근
+                        controller = app.state.controller
+                        engine = controller.engine
+                        
+                        if engine and engine.strategy.name in ("ai_market_analyzer", "ai_market_analyzer_high_risk"):
+                            try:
+                                # 여러 코인 분석
+                                selected_market, signal, candles = engine._analyze_multiple_markets()
+                                LOGGER.info(f"Background AI analysis: {selected_market} -> {signal.value}")
+                                
+                                # 분석 결과 저장
+                                if hasattr(engine.strategy, 'last_analysis') and engine.strategy.last_analysis:
+                                    engine.last_ai_analysis = engine.strategy.last_analysis.copy()
+                                    engine.last_ai_analysis['selected_market'] = selected_market
+                                    engine.last_ai_analysis['timestamp'] = datetime.now(UTC).isoformat()
+                                    
+                                    # signal을 문자열로 변환
+                                    signal_obj = engine.last_ai_analysis.get('signal')
+                                    if signal_obj is not None:
+                                        if hasattr(signal_obj, 'value'):
+                                            engine.last_ai_analysis['signal'] = signal_obj.value
+                                        elif hasattr(signal_obj, 'name'):
+                                            engine.last_ai_analysis['signal'] = signal_obj.name
+                                        else:
+                                            engine.last_ai_analysis['signal'] = str(signal_obj)
+                            except Exception as e:
+                                LOGGER.warning(f"Background AI analysis failed: {e}", exc_info=True)
+                    except AttributeError:
+                        # app.state가 아직 준비되지 않았을 수 있음
+                        LOGGER.debug("App state not ready yet for AI analysis")
+                # 60초마다 실행 (AI 전략 주기와 동일)
+                time.sleep(60)
+            except Exception as e:
+                LOGGER.error(f"Background AI analysis error: {e}", exc_info=True)
+                time.sleep(60)
+    
+    # 백그라운드 태스크 시작 (서버 시작과 무관하게)
+    # 함수 내부에서 app 객체를 참조하므로, 함수 정의 후에 시작
+    # 주의: 전역 변수 대신 app.state에 저장하여 스레드 관리
+    def start_background_ai_analysis():
+        # 이미 시작되었는지 확인
+        if not hasattr(app.state, '_ai_analysis_thread'):
+            ai_analysis_thread = Thread(target=background_ai_analysis, daemon=True)
+            ai_analysis_thread.start()
+            app.state._ai_analysis_thread = ai_analysis_thread
+            LOGGER.info("Background AI analysis task started")
+        elif not app.state._ai_analysis_thread.is_alive():
+            # 스레드가 죽었으면 재시작
+            ai_analysis_thread = Thread(target=background_ai_analysis, daemon=True)
+            ai_analysis_thread.start()
+            app.state._ai_analysis_thread = ai_analysis_thread
+            LOGGER.info("Background AI analysis task restarted")
+    
+    # 앱 시작 시 백그라운드 태스크 시작
+    start_background_ai_analysis()
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:  # noqa: D401
@@ -240,21 +321,264 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     account = controller.get_account_overview()
                     state = controller.get_state().as_dict()
                     
-                    # AI 전략인 경우에만 AI 분석 결과 가져오기
+                    # 계정 데이터에 암호화폐 총 가치 계산 추가
+                    accounts_data = account.get("accounts", [])
+                    krw_balance = account.get("krw_balance", 0.0)
+                    total_crypto_value = 0.0
+                    
+                    # 거래 가능한 코인만 계산
+                    try:
+                        for entry in accounts_data:
+                            currency = entry.get("currency", "")
+                            if currency == "KRW":
+                                continue
+                            balance = float(entry.get("balance", 0.0))
+                            if balance <= 0:
+                                continue
+                            if currency in ["LUNC", "APENFT", "LUNA2", "DOGE", "SHIB"]:
+                                continue
+                            
+                            market = f"KRW-{currency}"
+                            try:
+                                ticker = controller.engine.client.get_ticker(market)
+                                if ticker:
+                                    current_price = float(ticker.get("trade_price", 0.0))
+                                    total_crypto_value += balance * current_price
+                            except Exception:
+                                avg_price = float(entry.get("avg_buy_price", 0.0))
+                                if avg_price > 0:
+                                    total_crypto_value += balance * avg_price
+                    except Exception:
+                        pass
+                    
+                    account["total_crypto_value"] = total_crypto_value
+                    account["total_balance"] = krw_balance + total_crypto_value
+                    
+                    # AI 전략이면 항상 AI 분석 결과 가져오기 (SSE 스트림에서 직접 실행)
                     ai_analysis = None
                     if state.get("strategy") == "ai_market_analyzer":
+                        # 먼저 기존 분석 결과 확인
                         ai_analysis = controller.get_ai_analysis()
-                        # 디버깅: AI 분석 결과가 있는지 확인
-                        if ai_analysis:
-                            logger.debug(f"AI analysis available: {ai_analysis.get('selected_market', 'N/A')}")
+                        
+                        # 분석 결과가 없거나 오래된 경우 (60초 이상 경과) 즉시 분석 실행
+                        should_analyze = False
+                        analysis_in_progress = False
+                        
+                        if not ai_analysis:
+                            should_analyze = True
+                        elif ai_analysis.get("timestamp"):
+                            try:
+                                last_analysis_time = datetime.fromisoformat(ai_analysis["timestamp"].replace("Z", "+00:00"))
+                                time_diff = (datetime.now(UTC) - last_analysis_time).total_seconds()
+                                if time_diff > 60:  # 60초 이상 경과하면 재분석
+                                    should_analyze = True
+                            except Exception:
+                                should_analyze = True
                         else:
-                            logger.debug("AI analysis not available (strategy is ai_market_analyzer but no analysis result)")
+                            should_analyze = True
+                        
+                        # 분석이 필요한 경우 즉시 실행 (최대 1개 코인만 빠르게 분석)
+                        if should_analyze:
+                            # 분석 실행 플래그 확인 (중복 실행 방지)
+                            engine = controller.engine
+                            analysis_lock = getattr(engine, '_analysis_lock', None)
+                            if analysis_lock is None:
+                                import threading
+                                engine._analysis_lock = threading.Lock()
+                                analysis_lock = engine._analysis_lock
+                            
+                            # 락이 없으면 (분석 중이 아니면) 실행
+                            if not analysis_lock.locked():
+                                analysis_in_progress = True  # 분석 시작 플래그
+                                engine._analysis_in_progress = True
+                                
+                                def run_ai_analysis_async():
+                                    with analysis_lock:
+                                        try:
+                                            if engine and engine.strategy.name in ("ai_market_analyzer", "ai_market_analyzer_high_risk"):
+                                                LOGGER.info("SSE stream: Executing AI analysis for multiple markets")
+                                                try:
+                                                    # 여러 코인 분석 실행 (기존 메서드 사용)
+                                                    if hasattr(engine, '_analyze_multiple_markets'):
+                                                        selected_market, signal, candles = engine._analyze_multiple_markets()
+                                                        
+                                                        # 분석 결과 저장
+                                                        if hasattr(engine.strategy, 'last_analysis') and engine.strategy.last_analysis:
+                                                            engine.last_ai_analysis = engine.strategy.last_analysis.copy()
+                                                            engine.last_ai_analysis['selected_market'] = selected_market or engine.market
+                                                            engine.last_ai_analysis['timestamp'] = datetime.now(UTC).isoformat()
+                                                            
+                                                            # signal을 문자열로 변환
+                                                            signal_obj = engine.last_ai_analysis.get('signal')
+                                                            if signal_obj is not None:
+                                                                if hasattr(signal_obj, 'value'):
+                                                                    engine.last_ai_analysis['signal'] = signal_obj.value
+                                                                elif hasattr(signal_obj, 'name'):
+                                                                    engine.last_ai_analysis['signal'] = signal_obj.name
+                                                                else:
+                                                                    engine.last_ai_analysis['signal'] = str(signal_obj)
+                                                            
+                                                            signal_value = signal.value if hasattr(signal, 'value') else str(signal)
+                                                            LOGGER.info(f"SSE stream: AI analysis completed - {selected_market or engine.market} -> {signal_value} (confidence: {engine.last_ai_analysis.get('confidence', 0):.2%})")
+                                                        else:
+                                                            LOGGER.warning("SSE stream: AI analysis executed but no result available")
+                                                    else:
+                                                        # _analyze_multiple_markets가 없으면 현재 market만 분석 (fallback)
+                                                        current_market = engine.market
+                                                        raw = engine.client.get_candles(current_market, unit=engine.candle_unit, count=20)
+                                                        if raw:
+                                                            from upbit_bot.strategies import Candle
+                                                            candles_list = [
+                                                                Candle(
+                                                                    timestamp=int(item["timestamp"]),
+                                                                    open=float(item["opening_price"]),
+                                                                    high=float(item["high_price"]),
+                                                                    low=float(item["low_price"]),
+                                                                    close=float(item["trade_price"]),
+                                                                    volume=float(item["candle_acc_trade_volume"]),
+                                                                )
+                                                                for item in reversed(raw)
+                                                            ]
+                                                            
+                                                            if len(candles_list) >= 5:
+                                                                # AI 분석 실행
+                                                                signal = engine.strategy.on_candles(candles_list)
+                                                                
+                                                                # 분석 결과 저장
+                                                                if hasattr(engine.strategy, 'last_analysis') and engine.strategy.last_analysis:
+                                                                    engine.last_ai_analysis = engine.strategy.last_analysis.copy()
+                                                                    engine.last_ai_analysis['selected_market'] = current_market
+                                                                    engine.last_ai_analysis['timestamp'] = datetime.now(UTC).isoformat()
+                                                                    
+                                                                    # signal을 문자열로 변환
+                                                                    signal_obj = engine.last_ai_analysis.get('signal')
+                                                                    if signal_obj is not None:
+                                                                        if hasattr(signal_obj, 'value'):
+                                                                            engine.last_ai_analysis['signal'] = signal_obj.value
+                                                                        elif hasattr(signal_obj, 'name'):
+                                                                            engine.last_ai_analysis['signal'] = signal_obj.name
+                                                                        else:
+                                                                            engine.last_ai_analysis['signal'] = str(signal_obj)
+                                                                    
+                                                                    LOGGER.info(f"SSE stream: AI analysis completed - {current_market} -> {signal.value if hasattr(signal, 'value') else str(signal)} (confidence: {engine.last_ai_analysis.get('confidence', 0):.2%})")
+                                                                else:
+                                                                    LOGGER.warning("SSE stream: AI analysis executed but no result available")
+                                                except Exception as e:
+                                                    LOGGER.error(f"SSE stream: Multi-market analysis failed: {e}", exc_info=True)
+                                        except Exception as e:
+                                            LOGGER.error(f"SSE stream: AI analysis failed: {e}", exc_info=True)
+                                        finally:
+                                            # 분석 완료 플래그 제거
+                                            engine._analysis_in_progress = False
+                                
+                                # 백그라운드 스레드에서 실행
+                                analysis_thread = Thread(target=run_ai_analysis_async, daemon=True)
+                                analysis_thread.start()
+                                LOGGER.info("AI analysis thread started - analyzing multiple markets")
+                            else:
+                                # 이미 분석 중이면 플래그 확인
+                                analysis_in_progress = getattr(engine, '_analysis_in_progress', False)
+                        
+                        # 분석 결과가 여전히 없거나 분석 중이면 상태 정보 제공
+                        if not ai_analysis or analysis_in_progress:
+                            # Ollama 연결 확인 (더 상세한 검사)
+                            ollama_status = "disconnected"
+                            ollama_error = None
+                            try:
+                                test_response = requests.get("http://100.98.189.30:11434/api/tags", timeout=3)
+                                if test_response.status_code == 200:
+                                    models = test_response.json().get("models", [])
+                                    model_names = [m.get("name", "") for m in models]
+                                    if "qwen2.5-coder:7b" in model_names:
+                                        ollama_status = "connected"
+                                        LOGGER.info(f"Ollama 연결 확인: {len(models)}개 모델 사용 가능")
+                                    else:
+                                        ollama_status = "model_missing"
+                                        ollama_error = f"필요한 모델 'qwen2.5-coder:7b' 없음 (사용 가능: {', '.join(model_names[:3])}...)"
+                                        LOGGER.warning(ollama_error)
+                                else:
+                                    ollama_status = "error"
+                                    ollama_error = f"HTTP {test_response.status_code}"
+                                    LOGGER.warning(f"Ollama 응답 오류: {ollama_error}")
+                            except requests.exceptions.Timeout:
+                                ollama_status = "timeout"
+                                ollama_error = "연결 시간 초과 (3초)"
+                                LOGGER.warning(f"Ollama 연결 시간 초과")
+                            except requests.exceptions.ConnectionError as e:
+                                ollama_status = "disconnected"
+                                ollama_error = f"연결 오류: {str(e)[:100]}"
+                                LOGGER.error(f"Ollama 연결 실패: {e}")
+                            except Exception as e:
+                                ollama_status = "error"
+                                ollama_error = f"예기치 않은 오류: {str(e)[:100]}"
+                                LOGGER.error(f"Ollama 확인 중 오류: {e}", exc_info=True)
+                            
+                            # 분석 중이면 "analyzing" 상태, 아니면 "waiting" 또는 에러 상태
+                            if analysis_in_progress:
+                                status = "analyzing"
+                            elif ollama_status == "connected":
+                                # Ollama가 연결되어 있으면 분석을 시작해야 하므로 "analyzing"으로 표시
+                                # (실제로는 분석이 곧 시작되거나 진행 중일 수 있음)
+                                status = "analyzing"
+                            else:
+                                status = "ollama_disconnected"
+                            
+                            ai_analysis = {
+                                "selected_market": state.get("market", "N/A"),
+                                "signal": state.get("last_signal", "HOLD"),
+                                "confidence": 0.0,
+                                "market_data": {},
+                                "timestamp": datetime.now(UTC).isoformat(),
+                                "status": status,
+                                "ollama_status": ollama_status,
+                                "ollama_error": ollama_error
+                            }
+                    
+                    # 통계 데이터 가져오기 (오늘/누적 각각)
+                    statistics_data = None
+                    try:
+                        trade_history_store: TradeHistoryStore = app.state.trade_history_store
+                        today_stats = trade_history_store.get_statistics(today_only=True)
+                        cumulative_stats = trade_history_store.get_statistics(today_only=False)
+                        statistics_data = {
+                            "today": today_stats,
+                            "cumulative": cumulative_stats,
+                        }
+                    except Exception as e:
+                        LOGGER.warning(f"Failed to get statistics: {e}")
+                        empty_stats = {
+                            "total_trades": 0,
+                            "closed_positions": 0,
+                            "winning_trades": 0,
+                            "losing_trades": 0,
+                            "win_rate": 0.0,
+                            "total_pnl": 0.0,
+                            "avg_pnl_pct": 0.0,
+                            "avg_win": 0.0,
+                            "avg_loss": 0.0,
+                            "profit_factor": 0.0,
+                        }
+                        statistics_data = {
+                            "today": empty_stats,
+                            "cumulative": empty_stats,
+                        }
+                    
+                    # 거래 내역 가져오기 (최근 20개)
+                    recent_trades = None
+                    try:
+                        trade_history_store: TradeHistoryStore = app.state.trade_history_store
+                        recent_trades = trade_history_store.get_recent_trades(limit=20)
+                    except Exception as e:
+                        LOGGER.warning(f"Failed to get recent trades: {e}")
+                        recent_trades = []
                     
                     data = {
                         "timestamp": int(__import__("time").time() * 1000),
                         "balance": account,
                         "state": state,
-                        "ai_analysis": ai_analysis,  # AI 분석 결과 포함 (None일 수 있음)
+                        "ai_analysis": ai_analysis,  # AI 전략이면 항상 포함
+                        "statistics": statistics_data,  # 통계 데이터 포함
+                        "recent_trades": recent_trades,  # 최근 거래 내역 포함
                     }
                     
                     # Send SSE formatted data
@@ -263,7 +587,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # Update every 3 seconds for responsive UI
                     await asyncio.sleep(3)
                 except Exception as e:
-                    logger.error(f"Stream error: {e}")
+                    LOGGER.error(f"Stream error: {e}")
                     await asyncio.sleep(3)
         
         return StreamingResponse(generate(), media_type="text/event-stream")
@@ -276,10 +600,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"trades": trades})
 
     @app.get("/statistics")
-    async def get_statistics(market: str | None = None) -> JSONResponse:
+    async def get_statistics(market: str | None = None, today_only: bool = False) -> JSONResponse:
         """Get trading statistics."""
         trade_history_store: TradeHistoryStore = app.state.trade_history_store
-        stats = trade_history_store.get_statistics(market=market)
+        stats = trade_history_store.get_statistics(market=market, today_only=today_only)
         return JSONResponse(stats)
 
     @app.get("/performance")
@@ -333,7 +657,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             
             return JSONResponse({"data": chart_data, "market": market})
         except Exception as e:  # noqa: BLE001
-            LOGGER.error(f"Failed to get chart data for {market}: {e}")
+            error_msg = str(e)
+            # 404 에러 (코인 없음) 처리
+            if "404" in error_msg or "Code not found" in error_msg or "market not found" in error_msg.lower():
+                LOGGER.debug(f"Chart data not found for {market}: {e}")
+                return JSONResponse({"error": f"코인 '{market}' 데이터를 찾을 수 없습니다", "code": "NOT_FOUND"}, status_code=404)
+            # 기타 에러는 500으로 반환하되 상세 정보 로깅
+            LOGGER.error(f"Failed to get chart data for {market}: {e}", exc_info=True)
             return JSONResponse({"error": str(e)}, status_code=500)
 
     @app.post("/record-trade")
@@ -399,7 +729,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 controller.engine.strategy = new_strategy
                 
                 # AI 전략일 때는 1분 주기, 다른 전략은 5분 주기
-                if strategy == "ai_market_analyzer":
+                if strategy in ("ai_market_analyzer", "ai_market_analyzer_high_risk"):
                     controller.engine.candle_unit = 1
                     controller.engine.poll_interval = 60
                 else:
@@ -475,7 +805,7 @@ def _render_dashboard(
         current_price = None
         
         try:
-            ticker = client.get_ticker(market)
+            ticker = controller.engine.client.get_ticker(market)
             if ticker:
                 current_price = float(ticker.get("trade_price", 0.0))
                 LOGGER.debug(f"Got ticker for {currency}: {current_price}")
@@ -522,6 +852,7 @@ def _render_dashboard(
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; connect-src 'self' ws: wss:; img-src 'self' data: https:; font-src 'self' data:;">
     <title>Upbit Trading Bot Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -731,59 +1062,64 @@ def _render_dashboard(
 
         <!-- Statistics & Trade History (중요 정보 - 상단 배치) -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Performance Analysis -->
+            <!-- Performance Analysis - Split into Today and Cumulative -->
             <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
                 <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
                     <span class="text-3xl">📊</span>
                     <span>성과 분석</span>
                 </h2>
-                <div id="statistics" class="space-y-2" style="height: 18em; overflow-y-auto;">
-                    <!-- 기본 통계 -->
-                    <div class="grid grid-cols-2 gap-2 mb-3">
+                
+                <!-- 오늘 기준 성과 -->
+                <div class="mb-6">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                        <span class="text-xl">📅</span>
+                        <span>오늘 기준 성과</span>
+                    </h3>
+                    <div id="statistics-today" class="space-y-2" style="height: 9em; overflow-y-auto;">
+                        <div class="grid grid-cols-2 gap-2 mb-2">
                         <div class="stat-card rounded-xl p-3 shadow-sm">
                             <p class="text-xs text-gray-600 dark:text-gray-400">총 거래</p>
-                            <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-total-trades">0</p>
+                                <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-today-total-trades">0</p>
                         </div>
                         <div class="stat-card rounded-xl p-3 shadow-sm">
                             <p class="text-xs text-gray-600 dark:text-gray-400">승률</p>
-                            <p class="text-lg font-bold text-green-600 dark:text-green-400" id="stat-win-rate">0%</p>
+                                <p class="text-lg font-bold text-green-600 dark:text-green-400" id="stat-today-win-rate">0%</p>
                         </div>
                         <div class="stat-card rounded-xl p-3 shadow-sm">
                             <p class="text-xs text-gray-600 dark:text-gray-400">총 수익/손실</p>
-                            <p class="text-sm font-bold text-gray-900 dark:text-white" id="stat-total-pnl">0 KRW</p>
+                                <p class="text-sm font-bold text-gray-900 dark:text-white" id="stat-today-total-pnl">0 KRW</p>
                         </div>
                         <div class="stat-card rounded-xl p-3 shadow-sm">
                             <p class="text-xs text-gray-600 dark:text-gray-400">평균 수익률</p>
-                            <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-avg-profit-pct">0%</p>
+                                <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-today-avg-profit-pct">0%</p>
                         </div>
                     </div>
-                    
-                    <!-- 상세 분석 -->
-                    <div class="border-t border-gray-200 dark:border-gray-700 pt-2">
-                        <div class="grid grid-cols-2 gap-2 text-xs">
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">승리</span>
-                                <p class="font-bold text-green-600 dark:text-green-400" id="stat-winning-trades">0</p>
                             </div>
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">손실</span>
-                                <p class="font-bold text-red-600 dark:text-red-400" id="stat-losing-trades">0</p>
                             </div>
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">평균 수익</span>
-                                <p class="font-bold text-green-600 dark:text-green-400 text-xs" id="stat-avg-win">0</p>
+                
+                <!-- 누적 성과 -->
+                <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                        <span class="text-xl">📈</span>
+                        <span>누적 성과</span>
+                    </h3>
+                    <div id="statistics-cumulative" class="space-y-2" style="height: 9em; overflow-y-auto;">
+                        <div class="grid grid-cols-2 gap-2 mb-2">
+                            <div class="stat-card rounded-xl p-3 shadow-sm">
+                                <p class="text-xs text-gray-600 dark:text-gray-400">총 거래</p>
+                                <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-cumulative-total-trades">0</p>
                             </div>
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">평균 손실</span>
-                                <p class="font-bold text-red-600 dark:text-red-400 text-xs" id="stat-avg-loss">0</p>
+                            <div class="stat-card rounded-xl p-3 shadow-sm">
+                                <p class="text-xs text-gray-600 dark:text-gray-400">승률</p>
+                                <p class="text-lg font-bold text-green-600 dark:text-green-400" id="stat-cumulative-win-rate">0%</p>
                             </div>
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">수익 팩터</span>
-                                <p class="font-bold text-gray-900 dark:text-white" id="stat-profit-factor">0.00</p>
+                            <div class="stat-card rounded-xl p-3 shadow-sm">
+                                <p class="text-xs text-gray-600 dark:text-gray-400">총 수익/손실</p>
+                                <p class="text-sm font-bold text-gray-900 dark:text-white" id="stat-cumulative-total-pnl">0 KRW</p>
                             </div>
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">MDD</span>
-                                <p class="font-bold text-red-600 dark:text-red-400 text-xs" id="stat-max-dd">0</p>
+                            <div class="stat-card rounded-xl p-3 shadow-sm">
+                                <p class="text-xs text-gray-600 dark:text-gray-400">평균 수익률</p>
+                                <p class="text-lg font-bold text-gray-900 dark:text-white" id="stat-cumulative-avg-profit-pct">0%</p>
                             </div>
                         </div>
                     </div>
@@ -848,11 +1184,16 @@ def _render_dashboard(
                 <div class="space-y-4">
                     <form method="post" action="/start" class="space-y-3">
                         <div>
-                            <label for="mode" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">📊 거래 모드 선택</label>
-                            <select id="mode" name="mode" class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                <option value="dry" {'selected' if state.dry_run else ''}>🟢 Dry-run (시뮬레이션 - 실제 거래 없음)</option>
-                                <option value="live" {'selected' if not state.dry_run else ''}>🔴 Live (실제 거래 - 주의!)</option>
-                </select>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">📊 거래 모드 선택</label>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button type="button" id="mode-dry" class="w-full px-4 py-2 border-2 rounded-lg font-semibold transition-all {'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' if state.dry_run else 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:border-blue-400'}">
+                                    🟢 Dry-run
+                                </button>
+                                <button type="button" id="mode-live" class="w-full px-4 py-2 border-2 rounded-lg font-semibold transition-all {'border-red-500 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300' if not state.dry_run else 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:border-red-400'}">
+                                    🔴 Live
+                                </button>
+                            </div>
+                            <input type="hidden" id="mode" name="mode" value="{'dry' if state.dry_run else 'live'}">
                         </div>
                         <button type="submit" class="btn-success w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -956,14 +1297,11 @@ def _render_dashboard(
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Settings Card -->
             <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
-                <button id="settings-toggle" class="w-full flex items-center justify-between py-3 hover:opacity-80 transition" type="button">
-                    <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white flex items-center gap-2">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
                         <span class="text-3xl">⚙️</span>
                         <span>설정</span>
                     </h2>
-                    <span class="text-2xl text-gray-400 dark:text-gray-500" id="settings-icon">▼</span>
-                </button>
-                <form id="settings-form" method="post" action="/update-settings" class="space-y-4 mt-4" style="display: none;" data-settings-content>
+                <form id="settings-form" method="post" action="/update-settings" class="space-y-4">
                     <div>
                         <label for="strategy-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             Strategy
@@ -975,48 +1313,38 @@ def _render_dashboard(
                             onchange="updateStrategyDescription(this.value)"
                         >
                             {''.join([f'''
-                            <option value="{strategy_key}" {'selected' if state.strategy == strategy_key else ''}>
+                            <option value="{strategy_key}" {'selected' if (state.strategy or 'ai_market_analyzer') == strategy_key else ''}>
                                 {strategy_info.get(strategy_key, {}).get('name', strategy_key)}
                             </option>
-                            ''' for strategy_key in AVAILABLE_STRATEGIES])}
+                            ''' for strategy_key in AVAILABLE_STRATEGIES if strategy_key.startswith('ai_market_analyzer')])}
                 </select>
                         <div id="strategy-description" class="mt-2 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
                             <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">
-                                <strong>{strategy_info.get(state.strategy, {}).get('name', '알 수 없음')}</strong>
+                                <strong>{strategy_info.get(state.strategy or 'ai_market_analyzer', {}).get('name', 'AI 시장 분석')}</strong>
                             </p>
                             <p class="text-xs text-gray-500 dark:text-gray-500">
-                                {strategy_info.get(state.strategy, {}).get('description', '설명 없음')}
+                                {strategy_info.get(state.strategy or 'ai_market_analyzer', {}).get('description', '설명 없음')}
                             </p>
                             <div class="mt-2 flex gap-2">
                                 <span class="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
-                                    리스크: {strategy_info.get(state.strategy, {}).get('risk', 'N/A')}
+                                    리스크: {strategy_info.get(state.strategy or 'ai_market_analyzer', {}).get('risk', 'N/A')}
                                 </span>
                                 <span class="text-xs px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded">
-                                    적합: {strategy_info.get(state.strategy, {}).get('best_for', 'N/A')}
+                                    적합: {strategy_info.get(state.strategy or 'ai_market_analyzer', {}).get('best_for', 'N/A')}
                                 </span>
                             </div>
                         </div>
                     </div>
                     <div>
-                        <label for="market-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             Market
                         </label>
-                        <select 
-                            id="market-select" 
-                            name="market" 
-                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        >
-                            <option value="KRW-BTC" {'selected' if state.market == 'KRW-BTC' else ''}>KRW-BTC</option>
-                            <option value="KRW-ETH" {'selected' if state.market == 'KRW-ETH' else ''}>KRW-ETH</option>
-                            <option value="KRW-XRP" {'selected' if state.market == 'KRW-XRP' else ''}>KRW-XRP</option>
-                            <option value="KRW-ADA" {'selected' if state.market == 'KRW-ADA' else ''}>KRW-ADA</option>
-                            <option value="KRW-DOT" {'selected' if state.market == 'KRW-DOT' else ''}>KRW-DOT</option>
-                            <option value="KRW-LINK" {'selected' if state.market == 'KRW-LINK' else ''}>KRW-LINK</option>
-                            <option value="KRW-LTC" {'selected' if state.market == 'KRW-LTC' else ''}>KRW-LTC</option>
-                            <option value="KRW-BCH" {'selected' if state.market == 'KRW-BCH' else ''}>KRW-BCH</option>
-                            <option value="KRW-EOS" {'selected' if state.market == 'KRW-EOS' else ''}>KRW-EOS</option>
-                            <option value="KRW-TRX" {'selected' if state.market == 'KRW-TRX' else ''}>KRW-TRX</option>
-                        </select>
+                        <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+                            <p class="text-sm font-semibold text-gray-900 dark:text-white">
+                                {state.market or 'KRW-BTC'}
+                            </p>
+                        </div>
+                        <input type="hidden" name="market" value="{state.market or 'KRW-BTC'}">
                     </div>
                     <div>
                         <label for="order-pct-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -1050,14 +1378,11 @@ def _render_dashboard(
             
             <!-- Status Card -->
             <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
-                <button id="status-toggle" class="w-full flex items-center justify-between py-3 hover:opacity-80 transition" type="button">
-                    <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white flex items-center gap-2">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
                         <span class="text-3xl">📊</span>
                         <span>상태</span>
                     </h2>
-                    <span class="text-2xl text-gray-400 dark:text-gray-500" id="status-icon">▼</span>
-                </button>
-                <div class="space-y-3 mt-4" id="status-content" style="display: none;">
+                <div class="space-y-3">
                     <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
                         <span class="text-gray-600 dark:text-gray-400">Current Market</span>
                         <span class="font-semibold text-gray-900 dark:text-white">{state.market}</span>
@@ -1083,10 +1408,6 @@ def _render_dashboard(
             </div>
         </div>
 
-        <!-- Auto-refresh indicator -->
-        <div class="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
-            <p>자동 새로고침: <span id="refresh-counter">15</span>초</p>
-        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
@@ -1127,7 +1448,7 @@ def _render_dashboard(
         // 스트림 데이터로 UI 업데이트
         function updateUIWithStreamData(data) {{
             try {{
-                // 잔액 업데이트
+                // 잔액 업데이트 (실시간)
                 if (data.balance) {{
                     // KRW 잔액
                     const krwEl = document.getElementById('balance-krw');
@@ -1146,20 +1467,69 @@ def _render_dashboard(
                     // Total Balance
                     const totalEl = document.getElementById('balance-total');
                     if (totalEl) {{
-                        const total = (data.balance.krw_balance ?? 0) + (data.balance.total_crypto_value ?? 0);
+                        const total = data.balance.total_balance ?? ((data.balance.krw_balance ?? 0) + (data.balance.total_crypto_value ?? 0));
                         totalEl.textContent = total.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
                     }}
+                    
+                    // 자산 현황 테이블 업데이트 (accounts 데이터가 있으면)
+                    if (data.balance.accounts && Array.isArray(data.balance.accounts)) {{
+                        // 비동기로 업데이트 (성능 최적화)
+                        setTimeout(() => updateAccountsTable(data.balance.accounts), 100);
+                    }}
+                }}
+                
+                    // 통계 데이터 실시간 업데이트
+                    if (data.statistics) {{
+                        updateStatistics(data.statistics);
+                    }}
+                    
+                    // 거래 내역 실시간 업데이트
+                    if (data.recent_trades && Array.isArray(data.recent_trades)) {{
+                        updateTradeHistory(data.recent_trades);
                 }}
                 
                 // 상태 업데이트 (마지막 실행, 마지막 신호)
                 if (data.state) {{
                     const lastRunEl = document.getElementById('last-run-time');
                     const lastSignalEl = document.getElementById('last-signal-badge');
-                    if (lastRunEl) lastRunEl.textContent = data.state.last_run ?? '-';
-                    if (lastSignalEl) lastSignalEl.textContent = data.state.last_signal ?? 'HOLD';
+                    if (lastRunEl) {{
+                        const lastRun = data.state.last_run;
+                        if (lastRun) {{
+                            try {{
+                                const runTime = new Date(lastRun);
+                                const now = new Date();
+                                const diff = Math.round((now - runTime) / 1000);
+                                if (diff < 60) {{
+                                    lastRunEl.textContent = diff + '초 전';
+                                }} else if (diff < 3600) {{
+                                    lastRunEl.textContent = Math.round(diff / 60) + '분 전';
+                                }} else {{
+                                    lastRunEl.textContent = runTime.toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit'}});
+                                }}
+                            }} catch {{
+                                lastRunEl.textContent = lastRun;
+                            }}
+                        }} else {{
+                            lastRunEl.textContent = '-';
+                        }}
+                    }}
+                    if (lastSignalEl) {{
+                        const signal = data.state.last_signal ?? 'HOLD';
+                        lastSignalEl.textContent = signal;
+                        // 신호에 따른 색상 변경
+                        if (signal === 'BUY' || signal.toUpperCase() === 'BUY') {{
+                            lastSignalEl.className = 'font-semibold text-green-600 dark:text-green-400';
+                        }} else if (signal === 'SELL' || signal.toUpperCase() === 'SELL') {{
+                            lastSignalEl.className = 'font-semibold text-red-600 dark:text-red-400';
+                        }} else {{
+                            lastSignalEl.className = 'font-semibold text-gray-600 dark:text-gray-400';
+                        }}
+                    }}
                 }}
                 
-                // AI 분석 결과 표시
+                // AI 분석 결과 표시 (AI 전략이면 항상 표시)
+                if (data.state && data.state.strategy === 'ai_market_analyzer') {{
+                    // AI 전략이면 항상 분석 결과 표시 (결과가 없어도 상태 표시)
                 if (data.ai_analysis) {{
                     const analysis = data.ai_analysis;
                     const selectedMarket = analysis.selected_market || 'N/A';
@@ -1177,16 +1547,85 @@ def _render_dashboard(
                     const marketData = analysis.market_data || {{}};
                     const status = analysis.status;
                     
-                    // 분석 결과가 없는 경우 (status가 no_analysis인 경우)
-                    if (status === 'no_analysis') {{
                         const consoleEl = document.getElementById('ai-console-content');
                         if (consoleEl) {{
+                            // 타임스탬프 생성
                             const timestamp = analysis.timestamp ? new Date(analysis.timestamp).toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}}) : new Date().toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
                             const coinName = selectedMarket.replace('KRW-', '') || 'N/A';
-                            const message = `[${{timestamp}}] ${{coinName}} | ⚠️ AI 분석 결과 없음 (Ollama 연결 확인 필요)`;
-                            addAIConsoleMessage(message, 'yellow');
-                        }}
-                    }} else if (marketData && Object.keys(marketData).length > 0) {{
+                            
+                            // 분석 결과가 없는 경우 또는 실패한 경우
+                            if (status === 'analyzing') {{
+                                // 분석 중이면 대기 메시지 유지 또는 생성
+                                let waitingEl = document.getElementById('ai-console-waiting');
+                                if (!waitingEl) {{
+                                    waitingEl = document.createElement('div');
+                                    waitingEl.id = 'ai-console-waiting';
+                                    waitingEl.className = 'text-gray-500 flex items-center gap-2';
+                                    consoleEl.appendChild(waitingEl);
+                                }}
+                                waitingEl.innerHTML = '<span class="animate-spin">🔄</span><span>[' + timestamp + '] ' + coinName + ' | AI 분석 실행 중... (잠시만 기다려주세요)</span>';
+                            }} else {{
+                                // 분석이 완료되면 대기 메시지 제거
+                                const waitingEl = document.getElementById('ai-console-waiting');
+                                if (waitingEl) {{
+                                    waitingEl.remove();
+                                }}
+                                
+                                if (status === 'ollama_disconnected' || analysis.ollama_status === 'disconnected' || 
+                                    analysis.ollama_status === 'timeout' || analysis.ollama_status === 'error' ||
+                                    analysis.ollama_status === 'model_missing') {{
+                                    let errorMsg = '❌ Ollama 서버 연결 실패';
+                                    if (analysis.ollama_error) {{
+                                        errorMsg += ': ' + analysis.ollama_error;
+                                    }}
+                                    if (analysis.ollama_status === 'disconnected' || analysis.ollama_status === 'timeout') {{
+                                        errorMsg += ' (IP: 100.98.189.30:11434) - 노트북에서 "ollama serve" 실행 필요';
+                                    }} else if (analysis.ollama_status === 'model_missing') {{
+                                        errorMsg += ' - 노트북에서 "ollama pull qwen2.5-coder:7b" 실행 필요';
+                                    }}
+                                    const message = '[' + timestamp + '] ' + coinName + ' | ' + errorMsg;
+                                    addAIConsoleMessage(message, 'red');
+                                    
+                                    // Ollama 알림 표시
+                                    const alertEl = document.getElementById('ollama-alert');
+                                    if (alertEl) {{
+                                        alertEl.classList.remove('hidden');
+                                    }}
+                                }} else {{
+                                    // Ollama 연결 정상이면 알림 숨김
+                                    const alertEl = document.getElementById('ollama-alert');
+                                    if (alertEl) {{
+                                        alertEl.classList.add('hidden');
+                                    }}
+                                }}
+                                
+                                if (status === 'waiting') {{
+                                    // 분석 대기 중이면 분석 실행 메시지 표시 (분석이 곧 시작됨)
+                                    const waitingEl = document.getElementById('ai-console-waiting');
+                                    if (!waitingEl) {{
+                                        const newWaitingEl = document.createElement('div');
+                                        newWaitingEl.id = 'ai-console-waiting';
+                                        newWaitingEl.className = 'text-gray-500 flex items-center gap-2';
+                                        consoleEl.appendChild(newWaitingEl);
+                                    }}
+                                    const waitingElToUpdate = document.getElementById('ai-console-waiting');
+                                    if (waitingElToUpdate) {{
+                                        waitingElToUpdate.innerHTML = '<span class="animate-spin">🔄</span><span>[' + timestamp + '] ' + coinName + ' | AI 분석 시작 중... (잠시만 기다려주세요)</span>';
+                                    }}
+                                }} else if (status === 'stopped') {{
+                                    const lastRun = (data.state && data.state.last_run) ? data.state.last_run : '아직 없음';
+                                    const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ 서버 중지됨 (마지막 실행: ' + lastRun + ')';
+                                    addAIConsoleMessage(message, 'gray');
+                                }} else if (status === 'no_analysis') {{
+                                    const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ AI 분석 결과 없음 (Ollama 연결 확인 필요)';
+                                    addAIConsoleMessage(message, 'yellow');
+                                }} else if (status === 'insufficient_data') {{
+                                    const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ 데이터 부족 (최소 5개 캔들 필요)';
+                                    addAIConsoleMessage(message, 'yellow');
+                                }} else if (status === 'calculation_failed') {{
+                                    const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ 기술적 지표 계산 실패';
+                                    addAIConsoleMessage(message, 'yellow');
+                                }} else {{
                         // 신호에 따른 이모지와 색상
                         let signalEmoji = '⚪';
                         let signalColor = 'gray';
@@ -1201,20 +1640,179 @@ def _render_dashboard(
                             signalColor = 'gray';
                         }}
                         
-                        // 메시지 생성
+                                    // marketData가 있으면 상세 정보 표시, 없으면 간단히 표시
+                                    let message;
+                                    if (marketData && Object.keys(marketData).length > 0 && marketData.current_price) {{
+                                        const price = (marketData.current_price || 0).toLocaleString('ko-KR');
+                                        const vol = (marketData.volatility || 0).toFixed(2);
+                                        const volRatio = (marketData.volume_ratio || 0).toFixed(2);
+                                        message = '[' + timestamp + '] ' + coinName + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%) | 가격: ' + price + '원 | 변동성: ' + vol + '% | 거래량: ' + volRatio + 'x';
+                                    }} else {{
+                                        // marketData가 없어도 signal과 confidence는 표시
+                                        message = '[' + timestamp + '] ' + coinName + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%)';
+                                    }}
+                                    
+                                    addAIConsoleMessage(message, signalColor);
+                                    
+                                    // Ollama 연결 정상이면 알림 숨김
+                                    const alertEl = document.getElementById('ollama-alert');
+                                    if (alertEl) {{
+                                        alertEl.classList.add('hidden');
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }} else {{
+                        // AI 전략이지만 ai_analysis가 없는 경우 (서버 시작 직후 또는 분석 실행 중)
                         const consoleEl = document.getElementById('ai-console-content');
                         if (consoleEl) {{
-                            const timestamp = analysis.timestamp ? new Date(analysis.timestamp).toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}}) : new Date().toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
-                            // 코인 이름만 추출 (KRW-BTC -> BTC)
-                            const coinName = selectedMarket.replace('KRW-', '') || 'N/A';
-                            const message = `[${{timestamp}}] ${{coinName}} | ${{signalEmoji}} ${{signal}} (신뢰도: ${{confidence.toFixed(1)}}%) | 가격: ${{marketData.current_price?.toLocaleString('ko-KR') || 'N/A'}}원 | 변동성: ${{marketData.volatility?.toFixed(2) || 'N/A'}}% | 거래량: ${{marketData.volume_ratio?.toFixed(2) || 'N/A'}}x`;
+                            // 대기 메시지가 없으면 추가
+                            let waitingEl = document.getElementById('ai-console-waiting');
+                            if (!waitingEl) {{
+                                waitingEl = document.createElement('div');
+                                waitingEl.id = 'ai-console-waiting';
+                                waitingEl.className = 'text-gray-500 flex items-center gap-2';
+                                consoleEl.appendChild(waitingEl);
+                            }}
                             
-                            addAIConsoleMessage(message, signalColor);
+                            // Ollama 연결 상태 확인 (data.ai_analysis가 없을 수도 있음)
+                            const ollamaStatus = (data.ai_analysis && data.ai_analysis.ollama_status) ? data.ai_analysis.ollama_status : 'unknown';
+                            let statusText = 'AI 분석 초기화 중...';
+                            
+                            if (ollamaStatus === 'disconnected' || ollamaStatus === 'timeout') {{
+                                statusText = 'Ollama 서버 연결 실패 - 분석 불가';
+                            }} else if (ollamaStatus === 'model_missing') {{
+                                statusText = '필요한 모델 없음 - 분석 불가';
+                            }} else if (ollamaStatus === 'connected') {{
+                                statusText = '분석 실행 중...';
+                            }} else {{
+                                statusText = 'AI 분석 초기화 중...';
+                            }}
+                            
+                            const now = new Date().toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
+                            waitingEl.innerHTML = '<span class="animate-spin">🔄</span><span>[' + now + '] ' + statusText + '</span>';
                         }}
                     }}
                 }}
             }} catch (err) {{
                 console.error('Stream update error:', err);
+            }}
+        }}
+        
+        // 자산 현황 테이블 업데이트 함수
+        async function updateAccountsTable(accounts) {{
+            try {{
+                const tbody = document.querySelector('#account-snapshot tbody') || document.querySelector('table tbody');
+                if (!tbody) return;
+                
+                // 거래 가능한 코인만 필터링
+                const tradableAccounts = accounts.filter(entry => {{
+                    const currency = entry.currency || '';
+                    if (currency === 'KRW') return false;
+                    const balance = parseFloat(entry.balance || 0);
+                    if (balance <= 0) return false;
+                    if (['LUNC', 'APENFT', 'LUNA2', 'DOGE', 'SHIB'].includes(currency)) return false;
+                    return true;
+                }});
+                
+                // 각 코인 행 업데이트
+                const rows = tbody.querySelectorAll('tr');
+                const coinRowMap = {{}};
+                // 유효하지 않은 코인 이름 저장 (404 에러 방지)
+                const invalidCoins = new Set();
+                
+                rows.forEach(row => {{
+                    const coinText = row.querySelector('td')?.textContent.trim().split(' ')[0];
+                    // 유효성 검사: 영문/숫자로만 구성된 코인만 허용 (최소 2자, 최대 10자)
+                    if (coinText && !coinText.includes('보유한') && /^[A-Z0-9]{{2,10}}$/.test(coinText)) {{
+                        coinRowMap[coinText] = row;
+                    }}
+                }});
+                
+                // 각 코인 데이터 업데이트
+                for (const entry of tradableAccounts) {{
+                    const currency = entry.currency || '';
+                    
+                    // 유효성 검사: 영문/숫자로만 구성된 코인만 허용
+                    if (!/^[A-Z0-9]{{2,10}}$/.test(currency)) {{
+                        console.debug('Invalid coin name skipped: ' + currency);
+                        continue;
+                    }}
+                    
+                    // 이전에 404 에러를 받은 코인은 스킵
+                    if (invalidCoins.has(currency)) {{
+                        continue;
+                    }}
+                    
+                    const market = `KRW-${{currency}}`;
+                    
+                    try {{
+                        // 현재가 조회
+                        const response = await fetch(`/chart/${{currency}}?candles=1`);
+                        if (!response.ok) {{
+                            // 404나 500 에러면 스킵 (로그만 남기고 계속 진행)
+                            if (response.status === 404 || response.status === 500) {{
+                                console.debug('Chart data not available for ' + currency + ': HTTP ' + response.status);
+                                invalidCoins.add(currency); // 재시도 방지
+                                continue;
+                            }}
+                            throw new Error('HTTP ' + response.status);
+                        }}
+                        const chartData = await response.json();
+                        
+                        // 에러 응답 체크
+                        if (chartData.error) {{
+                            console.debug(`Chart data error for ${{currency}}: ${{chartData.error}}`);
+                            continue;
+                        }}
+                        
+                        const balance = parseFloat(entry.balance || 0);
+                        const avgBuyPrice = parseFloat(entry.avg_buy_price || 0);
+                        let currentPrice = avgBuyPrice;
+                        
+                        if (chartData.data && chartData.data.length > 0) {{
+                            currentPrice = chartData.data[chartData.data.length - 1].close;
+                        }}
+                        
+                        const currentValue = balance * currentPrice;
+                        const purchaseAmount = balance * avgBuyPrice;
+                        
+                        // 기존 행 찾기 또는 새 행 생성
+                        let row = coinRowMap[currency];
+                        if (!row) {{
+                            // 새 행 생성 (필요 시)
+                            continue;
+                        }}
+                        
+                        const cells = row.querySelectorAll('td');
+                        if (cells.length >= 6) {{
+                            // 코인명 (이미 있음)
+                            // 보유량
+                            cells[1].textContent = balance.toFixed(8);
+                            // 매수가
+                            cells[2].textContent = avgBuyPrice > 0 ? avgBuyPrice.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }}) : '-';
+                            // 구매금액
+                            cells[3].textContent = purchaseAmount.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                            // 현재가
+                            cells[4].textContent = currentPrice > 0 ? currentPrice.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }}) : '-';
+                            // 현재가치
+                            cells[5].textContent = currentValue.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                            
+                            // 수익률에 따른 색상 변경
+                            if (currentValue > purchaseAmount) {{
+                                cells[5].className = 'py-3 px-4 text-right font-medium text-green-600 dark:text-green-400';
+                            }} else if (currentValue < purchaseAmount) {{
+                                cells[5].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
+                            }} else {{
+                                cells[5].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
+                            }}
+                        }}
+                    }} catch (err) {{
+                        console.debug('Failed to update ' + currency + ':', err);
+                    }}
+                }}
+            }} catch (err) {{
+                console.error('Failed to update accounts table:', err);
             }}
         }}
         
@@ -1236,12 +1834,31 @@ def _render_dashboard(
                     const coinText = cells[0].textContent.trim().split(' ')[0];
                     if (!coinText || coinText === '보유한') continue;
                     
+                    // 유효성 검사: 영문/숫자로만 구성된 코인만 허용
+                    if (!/^[A-Z0-9]{{2,10}}$/.test(coinText)) {{
+                        console.debug('Invalid coin name skipped: ' + coinText);
+                        continue;
+                    }}
+                    
                     try {{
                         // 현재가 조회
                         const response = await fetch(`/chart/${{coinText}}?candles=1`);
+                        if (!response.ok) {{
+                            // 404나 500 에러면 스킵 (로그만 남기고 계속 진행)
+                            if (response.status === 404 || response.status === 500) {{
+                                console.debug('Chart data not available for ' + coinText + ': HTTP ' + response.status);
+                                continue;
+                            }}
+                            throw new Error('HTTP ' + response.status);
+                        }}
                         const data = await response.json();
                         
-                        if (data.data && data.data.length > 0) {{
+                        // 에러 응답 체크
+                        if (data.error || !data.data || data.data.length === 0) {{
+                            console.debug(`Chart data error for ${{coinText}}: ${{data.error || 'No data'}}`);
+                            continue;
+                        }}
+                        
                             const balance = parseFloat(cells[1].textContent);
                             const currentPrice = data.data[data.data.length - 1].close;
                             const currentValue = balance * currentPrice;
@@ -1260,7 +1877,6 @@ def _render_dashboard(
                                 cells[5].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
                             }} else {{
                                 cells[5].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
-                            }}
                         }}
                     }} catch (err) {{
                         console.debug(`Price update failed for ${{coinText}}:`, err);
@@ -1280,29 +1896,6 @@ def _render_dashboard(
         updateAccountValues();
         
         // Settings & Status 드롭다운 토글
-        document.getElementById('settings-toggle').addEventListener('click', () => {{
-            const form = document.getElementById('settings-form');
-            const icon = document.getElementById('settings-icon');
-            if (form.style.display === 'none') {{
-                form.style.display = 'block';
-                icon.textContent = '▲';
-            }} else {{
-                form.style.display = 'none';
-                icon.textContent = '▼';
-            }}
-        }});
-        
-        document.getElementById('status-toggle').addEventListener('click', () => {{
-            const content = document.getElementById('status-content');
-            const icon = document.getElementById('status-icon');
-            if (content.style.display === 'none') {{
-                content.style.display = 'block';
-                icon.textContent = '▲';
-            }} else {{
-                content.style.display = 'none';
-                icon.textContent = '▼';
-            }}
-        }});
         
         // AI 콘솔 Clear 버튼
         let consoleCleared = false;
@@ -1375,26 +1968,8 @@ def _render_dashboard(
             console.scrollTop = console.scrollHeight;
         }};
         
-        // Ollama 연결 상태 모니터링 (30초마다)
-        async function checkOllamaConnection() {{
-            try {{
-                const response = await fetch('http://100.98.189.30:11434/api/tags', {{ 
-                    method: 'GET',
-                    mode: 'no-cors'
-                }});
-                const alert = document.getElementById('ollama-alert');
-                alert.classList.add('hidden');
-            }} catch (err) {{
-                const alert = document.getElementById('ollama-alert');
-                alert.classList.remove('hidden');
-                console.warn('Ollama connection failed:', err);
-            }}
-        }}
-        
-        // 초기 체크
-        checkOllamaConnection();
-        // 30초마다 체크
-        setInterval(checkOllamaConnection, 30000);
+        // Ollama 연결 상태는 SSE 스트림에서 확인하므로 클라이언트에서 직접 호출하지 않음
+        // (CORB 에러 방지를 위해 서버 사이드에서만 처리)
         
         // 차트 토글 및 렌더링
         async function toggleChart(currency, row) {{
@@ -1411,16 +1986,26 @@ def _render_dashboard(
                 // 차트 데이터 로드
                 try {{
                     const response = await fetch(`/chart/${{currency}}`);
+                    if (!response.ok) {{
+                        if (response.status === 404) {{
+                            container.innerHTML = '<div class="flex items-center justify-center h-full text-yellow-500">코인 데이터를 찾을 수 없습니다</div>';
+                        }} else {{
+                            container.innerHTML = '<div class="flex items-center justify-center h-full text-red-500">차트 로드 실패 (HTTP ' + response.status + ')</div>';
+                        }}
+                        return;
+                    }}
                     const result = await response.json();
                     
-                    if (result.data && result.data.length > 0) {{
+                    if (result.error) {{
+                        container.innerHTML = '<div class="flex items-center justify-center h-full text-yellow-500">' + (result.error || '데이터 없음') + '</div>';
+                    }} else if (result.data && result.data.length > 0) {{
                         renderChart(currency, result.data);
                     }} else {{
                         container.innerHTML = '<div class="flex items-center justify-center h-full text-gray-500">데이터 없음</div>';
                     }}
                 }} catch (err) {{
-                    console.error(`Chart load error for ${{currency}}:`, err);
-                    container.innerHTML = `<div class="flex items-center justify-center h-full text-red-500">차트 로드 실패</div>`;
+                    console.error('Chart load error for ' + currency + ':', err);
+                    container.innerHTML = '<div class="flex items-center justify-center h-full text-red-500">차트 로드 실패</div>';
                 }}
             }} else {{
                 // 차트 숨기기
@@ -1548,33 +2133,51 @@ def _render_dashboard(
             }}
         }}
 
-        // 거래 내역 로드
+        // 거래 내역 로드 (기존 함수 - 호환성 유지)
         async function loadTradeHistory() {{
             try {{
                 const response = await fetch('/trades?limit=100');
                 const data = await response.json();
+                if (data.trades) {{
+                    updateTradeHistory(data.trades);
+                }}
+            }} catch (error) {{
+                console.error('Failed to load trade history:', error);
+            }}
+        }}
+        
+        // 거래 내역 업데이트 함수 (SSE 스트림에서 호출)
+        function updateTradeHistory(trades) {{
+            if (!trades || !Array.isArray(trades)) return;
+            
+            try {{
                 const tbody = document.getElementById('trade-history-body');
+                if (!tbody) return;
                 
-                if (data.trades && data.trades.length > 0) {{
-                    tbody.innerHTML = data.trades.map(trade => {{
+                if (trades.length > 0) {{
+                    tbody.innerHTML = trades.map(trade => {{
                         const date = new Date(trade.timestamp);
                         const timeStr = date.toLocaleTimeString('ko-KR', {{ hour: '2-digit', minute: '2-digit' }});
                         const strategyName = STRATEGY_INFO[trade.strategy]?.name || trade.strategy;
                         const sideColor = trade.side === 'buy' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
                         const sideBg = trade.side === 'buy' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20';
                         
+                        // market에서 currency 추출 (KRW-BTC -> BTC)
+                        const currency = trade.market ? trade.market.replace('KRW-', '') : '-';
+                        
                         const price = trade.price || 0;
                         const volume = trade.volume || 0;
                         const totalAmount = price * volume;
                         
+                        // pnl은 positions 테이블에서 가져오거나 계산
                         const pnl = trade.pnl || 0;
-                        const pnlColor = pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
                         const pnlPct = trade.pnl_pct || 0;
+                        const pnlColor = pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
                         
                         return `
                             <tr class="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition ${{sideBg}}">
                                 <td class="py-2 px-2 text-xs text-gray-600 dark:text-gray-400">${{timeStr}}</td>
-                                <td class="py-2 px-2 text-xs font-semibold text-gray-900 dark:text-white">${{trade.currency || '-'}}</td>
+                                <td class="py-2 px-2 text-xs font-semibold text-gray-900 dark:text-white">${{currency}}</td>
                                 <td class="py-2 px-2 text-xs text-gray-900 dark:text-white">${{strategyName}}</td>
                                 <td class="py-2 px-2 text-xs text-center font-semibold ${{sideColor}}">${{trade.side === 'buy' ? '🟢 매수' : '🔴 매도'}}</td>
                                 <td class="py-2 px-2 text-xs text-right text-gray-900 dark:text-white">${{price.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }})}}</td>
@@ -1589,31 +2192,125 @@ def _render_dashboard(
                     tbody.innerHTML = '<tr><td colspan="9" class="py-4 text-center text-gray-500 dark:text-gray-400 text-sm">거래 내역이 없습니다.</td></tr>';
                 }}
             }} catch (error) {{
-                console.error('Failed to load trade history:', error);
+                console.error('Failed to update trade history:', error);
             }}
         }}
 
-        // 통계 로드
+        // 통계 업데이트 헬퍼 함수 (단일 통계 객체 업데이트)
+        function updateSingleStatistics(prefix, stats) {{
+            if (!stats) return;
+            
+            try {{
+                // 총 거래
+                const totalTradesEl = document.getElementById('stat-' + prefix + '-total-trades');
+                if (totalTradesEl) {{
+                    totalTradesEl.textContent = stats.total_trades || 0;
+                }}
+                
+                // 승률
+                const winRateEl = document.getElementById('stat-' + prefix + '-win-rate');
+                if (winRateEl) {{
+                    const winRate = stats.win_rate || 0;
+                    winRateEl.textContent = winRate.toFixed(1) + '%';
+                }}
+                
+                // 총 수익/손실 (마이너스 손실 포함)
+                const totalPnlEl = document.getElementById('stat-' + prefix + '-total-pnl');
+                if (totalPnlEl) {{
+                    const totalPnl = stats.total_pnl || 0;
+                    const pnlText = totalPnl.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                    totalPnlEl.textContent = pnlText + ' KRW';
+                    // 마이너스 손실인 경우 빨간색, 플러스 수익인 경우 초록색
+                    if (totalPnl < 0) {{
+                        totalPnlEl.className = 'text-sm font-bold text-red-600 dark:text-red-400';
+                    }} else if (totalPnl > 0) {{
+                        totalPnlEl.className = 'text-sm font-bold text-green-600 dark:text-green-400';
+                    }} else {{
+                        totalPnlEl.className = 'text-sm font-bold text-gray-900 dark:text-white';
+                    }}
+                }}
+                
+                // 평균 수익률
+                const avgPnlEl = document.getElementById('stat-' + prefix + '-avg-profit-pct');
+                if (avgPnlEl) {{
+                    const avgPnl = stats.avg_pnl_pct || 0;
+                    avgPnlEl.textContent = avgPnl.toFixed(2) + '%';
+                    // 마이너스인 경우 빨간색
+                    if (avgPnl < 0) {{
+                        avgPnlEl.className = 'text-lg font-bold text-red-600 dark:text-red-400';
+                    }} else if (avgPnl > 0) {{
+                        avgPnlEl.className = 'text-lg font-bold text-green-600 dark:text-green-400';
+                    }} else {{
+                        avgPnlEl.className = 'text-lg font-bold text-gray-900 dark:text-white';
+                    }}
+                }}
+                
+            }} catch (error) {{
+                console.error('Failed to update statistics (' + prefix + '):', error);
+            }}
+        }}
+        
+        // 통계 로드 (오늘/누적 각각)
         async function loadStatistics() {{
             try {{
-                const response = await fetch('/statistics');
-                const stats = await response.json();
+                // 오늘 통계
+                const todayResponse = await fetch('/statistics?today_only=true');
+                const todayStats = await todayResponse.json();
+                updateSingleStatistics('today', todayStats);
                 
-                const statElements = {{
-                    'stat-total-trades': stats.total_trades || 0,
-                    'stat-closed-positions': stats.closed_positions || 0,
-                    'stat-win-rate': (stats.win_rate || 0).toFixed(1) + '%',
-                    'stat-total-pnl': (stats.total_pnl || 0).toLocaleString() + ' KRW',
-                    'stat-avg-pnl': (stats.avg_pnl_pct || 0).toFixed(2) + '%'
-                }};
-                
-                Object.entries(statElements).forEach(([id, value]) => {{
-                    const el = document.getElementById(id);
-                    if (el) el.textContent = value;
-                }});
+                // 누적 통계
+                const cumulativeResponse = await fetch('/statistics?today_only=false');
+                const cumulativeStats = await cumulativeResponse.json();
+                updateSingleStatistics('cumulative', cumulativeStats);
             }} catch (error) {{
                 console.error('Failed to load statistics:', error);
             }}
+        }}
+        
+        // 통계 업데이트 함수 (SSE 스트림에서 호출)
+        function updateStatistics(stats) {{
+            if (!stats) return;
+            
+            try {{
+                // 오늘/누적 각각 업데이트
+                if (stats.today) {{
+                    updateSingleStatistics('today', stats.today);
+                }}
+                if (stats.cumulative) {{
+                    updateSingleStatistics('cumulative', stats.cumulative);
+                }}
+                
+                // 기존 형식 호환성 (단일 stats 객체인 경우)
+                if (stats.total_trades !== undefined && !stats.today && !stats.cumulative) {{
+                    updateSingleStatistics('today', stats);
+                    updateSingleStatistics('cumulative', stats);
+                }}
+            }} catch (error) {{
+                console.error('Failed to update statistics:', error);
+            }}
+        }}
+
+        // 거래 모드 버튼 처리 (드롭다운 대신 버튼)
+        const modeDryBtn = document.getElementById('mode-dry');
+        const modeLiveBtn = document.getElementById('mode-live');
+        const modeInput = document.getElementById('mode');
+        
+        if (modeDryBtn && modeLiveBtn && modeInput) {{
+            modeDryBtn.addEventListener('click', () => {{
+                modeInput.value = 'dry';
+                modeDryBtn.classList.remove('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-700', 'text-gray-700', 'dark:text-gray-300');
+                modeDryBtn.classList.add('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/30', 'text-blue-700', 'dark:text-blue-300');
+                modeLiveBtn.classList.remove('border-red-500', 'bg-red-50', 'dark:bg-red-900/30', 'text-red-700', 'dark:text-red-300');
+                modeLiveBtn.classList.add('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-700', 'text-gray-700', 'dark:text-gray-300');
+            }});
+            
+            modeLiveBtn.addEventListener('click', () => {{
+                modeInput.value = 'live';
+                modeLiveBtn.classList.remove('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-700', 'text-gray-700', 'dark:text-gray-300');
+                modeLiveBtn.classList.add('border-red-500', 'bg-red-50', 'dark:bg-red-900/30', 'text-red-700', 'dark:text-red-300');
+                modeDryBtn.classList.remove('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/30', 'text-blue-700', 'dark:text-blue-300');
+                modeDryBtn.classList.add('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-700', 'text-gray-700', 'dark:text-gray-300');
+            }});
         }}
 
         // 설정 업데이트 폼 처리
@@ -1640,10 +2337,10 @@ def _render_dashboard(
                         `;
                         settingsForm.insertBefore(messageDiv, settingsForm.firstChild);
                         
-                        // 3초 후 메시지 제거 및 페이지 새로고침
+                        // 3초 후 메시지 제거 (페이지 새로고침 없이)
                         setTimeout(() => {{
                             messageDiv.remove();
-                            window.location.reload();
+                            // 페이지 새로고침 없이 SSE 스트림으로 업데이트됨
                         }}, 2000);
                     }} else {{
                         // 오류 메시지 표시
@@ -1660,54 +2357,12 @@ def _render_dashboard(
         loadTradeHistory();
         loadStatistics();
         
-        // 주기적 업데이트 (30초마다)
+        // 자동 새로고침 (20초마다) - 숫자 업데이트를 위해 필요
         setInterval(() => {{
-            loadTradeHistory();
-            loadStatistics();
-        }}, 30000);
+            location.reload();
+        }}, 20000);  // 20초마다 페이지 새로고침
 
-        // Auto-refresh 기능 (서버가 실행 중일 때만)
-        let refreshCounter = 15;
-        let isServerRunning = false;
-        const counterElement = document.getElementById('refresh-counter');
-        
-        // 서버 상태 확인
-        async function checkServerStatus() {{
-            try {{
-                const response = await fetch('/status');
-                const data = await response.json();
-                isServerRunning = data.running === true;
-            }} catch (err) {{
-                isServerRunning = false;
-            }}
-        }}
-        
-        // 초기 서버 상태 확인
-        checkServerStatus();
-        
-        // 5초마다 서버 상태 확인
-        setInterval(checkServerStatus, 5000);
-        
-        setInterval(() => {{
-            // 서버가 실행 중일 때만 카운터 감소 및 새로고침
-            if (isServerRunning) {{
-                refreshCounter--;
-                if (counterElement) {{
-                    counterElement.textContent = refreshCounter;
-                }}
-                if (refreshCounter <= 0) {{
-                    refreshCounter = 15;
-                    // 페이지 새로고침
-                    window.location.reload();
-                }}
-            }} else {{
-                // 서버가 중지되어 있으면 카운터 리셋
-                refreshCounter = 15;
-                if (counterElement) {{
-                    counterElement.textContent = '대기 중...';
-                }}
-            }}
-        }}, 1000);
+        // Auto-refresh 기능 완전히 제거됨 (SSE 스트림으로 실시간 업데이트)
 
         // 실시간 업데이트 (5초마다)
         setInterval(() => {{

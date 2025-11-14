@@ -210,46 +210,92 @@ class TradeHistoryStore:
                     (exit_price, exit_volume, exit_amount, exit_time, pnl, pnl_pct, position_id),
                 )
 
-    def get_statistics(self, market: str | None = None) -> dict[str, Any]:
-        """Get trading statistics."""
+    def get_statistics(self, market: str | None = None, today_only: bool = False) -> dict[str, Any]:
+        """Get trading statistics.
+        
+        Args:
+            market: 특정 마켓 필터링 (None이면 모든 마켓)
+            today_only: True면 오늘만, False면 누적 통계
+        """
         where_clause = "WHERE market = ?" if market else ""
-        params = (market,) if market else ()
+        params = list((market,) if market else ())
+        
+        # 오늘만 필터링
+        today_filter = "DATE(timestamp) = DATE('now', 'localtime')"
+        if today_only:
+            if where_clause:
+                where_clause += f" AND {today_filter}"
+            else:
+                where_clause = f"WHERE {today_filter}"
 
         # Total trades
         cursor = self._conn.execute(
             f"SELECT COUNT(*) as count FROM trades {where_clause}",
-            params,
+            tuple(params),
         )
         total_trades = cursor.fetchone()["count"]
 
-        # Closed positions
+        # Closed positions 필터링
+        pos_where = "WHERE status = 'closed'"
+        pos_params = []
+        if market:
+            pos_where += " AND market = ?"
+            pos_params.append(market)
+        if today_only:
+            pos_where += " AND DATE(exit_time) = DATE('now', 'localtime')"
+        
+        # Closed positions (마이너스 손실 포함)
         cursor = self._conn.execute(
-            f"SELECT COUNT(*) as count, SUM(pnl) as total_pnl, AVG(pnl_pct) as avg_pnl_pct "
-            f"FROM positions WHERE status = 'closed' {('AND market = ?' if market else '')}",
-            params,
+            f"SELECT COUNT(*) as count, COALESCE(SUM(pnl), 0) as total_pnl, COALESCE(AVG(pnl_pct), 0) as avg_pnl_pct "
+            f"FROM positions {pos_where}",
+            tuple(pos_params),
         )
         row = cursor.fetchone()
         closed_positions = row["count"] or 0
-        total_pnl = row["total_pnl"] or 0.0
-        avg_pnl_pct = row["avg_pnl_pct"] or 0.0
+        # 마이너스 손실도 제대로 반영되도록 float 변환
+        total_pnl = float(row["total_pnl"]) if row["total_pnl"] is not None else 0.0
+        avg_pnl_pct = float(row["avg_pnl_pct"]) if row["avg_pnl_pct"] is not None else 0.0
 
         # Winning trades
+        win_where = pos_where + " AND pnl > 0"
         cursor = self._conn.execute(
-            f"SELECT COUNT(*) as count FROM positions "
-            f"WHERE status = 'closed' AND pnl > 0 {('AND market = ?' if market else '')}",
-            params,
+            f"SELECT COUNT(*) as count FROM positions {win_where}",
+            tuple(pos_params),
         )
         winning_trades = cursor.fetchone()["count"] or 0
 
         win_rate = (winning_trades / closed_positions * 100) if closed_positions > 0 else 0.0
+        
+        # 상세 통계 (평균 수익/손실, 수익 팩터, MDD 등)
+        cursor = self._conn.execute(
+            f"SELECT AVG(CASE WHEN pnl > 0 THEN pnl ELSE NULL END) as avg_win, "
+            f"AVG(CASE WHEN pnl < 0 THEN pnl ELSE NULL END) as avg_loss, "
+            f"MAX(pnl) as max_profit, MIN(pnl) as max_loss "
+            f"FROM positions {pos_where}",
+            tuple(pos_params),
+        )
+        detail_row = cursor.fetchone()
+        avg_win = float(detail_row["avg_win"]) if detail_row["avg_win"] is not None else 0.0
+        avg_loss = float(detail_row["avg_loss"]) if detail_row["avg_loss"] is not None else 0.0
+        max_profit = float(detail_row["max_profit"]) if detail_row["max_profit"] is not None else 0.0
+        max_loss = float(detail_row["max_loss"]) if detail_row["max_loss"] is not None else 0.0
+        
+        # 수익 팩터
+        profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else 0.0
 
         return {
             "total_trades": total_trades,
             "closed_positions": closed_positions,
             "winning_trades": winning_trades,
+            "losing_trades": closed_positions - winning_trades,
             "win_rate": win_rate,
             "total_pnl": total_pnl,
             "avg_pnl_pct": avg_pnl_pct,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "profit_factor": profit_factor,
+            "max_profit": max_profit,
+            "max_loss": max_loss,
         }
 
     def close(self) -> None:

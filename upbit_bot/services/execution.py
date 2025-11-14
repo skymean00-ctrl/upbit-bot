@@ -296,13 +296,13 @@ class ExecutionEngine:
     def _execute_signal(self, signal: StrategySignal, candles: list[Candle]) -> dict | None:
         self.last_order_info = None
         if signal is StrategySignal.HOLD:
-            LOGGER.debug("No action taken for market %s", self.market)
+            LOGGER.debug("No action taken for market %s (HOLD signal)", self.market)
             return None
 
         last_candle = candles[-1]
         side = "bid" if signal is StrategySignal.BUY else "ask"
         LOGGER.info(
-            "Signal %s -> %s for %s (price %.0f)",
+            "🔥 EXECUTING SIGNAL: %s -> %s for %s (price %.0f)",
             self.strategy.name,
             signal.value,
             self.market,
@@ -386,13 +386,14 @@ class ExecutionEngine:
                 )
                 return info
 
+            LOGGER.info("📤 Placing BUY order: market=%s, side=%s, amount=%.0f KRW", self.market, side, stake)
             response = self.client.place_order(
                 self.market,
                 side=side,
                 ord_type="price",
                 price=f"{stake:.0f}",
             )
-            LOGGER.debug("Order response: %s", response)
+            LOGGER.info("✅ BUY order placed successfully: %s", response)
             self.position_price = last_candle.close
             self.position_volume = est_volume
             if self.risk_manager:
@@ -445,10 +446,10 @@ class ExecutionEngine:
         # 매도 처리 (신호 발생 시 무조건 매도, 필요시 추가 매수)
         sell_amount = (self.position_volume or 0.0) * last_candle.close
         if not self._can_sell(sell_amount, last_candle):
-            LOGGER.info(
-                "SELL signal failed: position value %.0f KRW, unable to execute (insufficient balance or data)",
-                sell_amount
-            )
+        LOGGER.warning(
+            "⚠️ SELL signal failed: position value %.0f KRW, unable to execute (insufficient balance or data)",
+            sell_amount
+        )
             return None
 
         pnl_pct = (
@@ -516,13 +517,14 @@ class ExecutionEngine:
         if volume <= 0:
             order_amount = self._determine_order_amount()
             volume = order_amount / last_candle.close if last_candle.close else 0.0
+        LOGGER.info("📤 Placing SELL order: market=%s, side=%s, volume=%.6f", self.market, side, volume)
         response = self.client.place_order(
             self.market,
             side=side,
             ord_type="market",
             volume=f"{volume}",
         )
-        LOGGER.debug("Order response: %s", response)
+        LOGGER.info("✅ SELL order placed successfully: %s", response)
         if self.risk_manager:
             self.risk_manager.register_exit(self.market, pnl_pct=pnl_pct)
         
@@ -593,21 +595,22 @@ class ExecutionEngine:
             best_signal: StrategySignal = StrategySignal.HOLD
             best_candles: list[Candle] = []
             best_confidence = 0.0
+            best_analysis: dict | None = None  # 최고 신뢰도 분석 결과 저장
             
             # 이미 포지션이 있는 코인은 제외
             portfolio = self.get_portfolio_status()
             open_markets = {pos.get("market") for pos in portfolio.get("open_positions", [])}
             
-            # 각 코인 분석 (최대 20개만 분석하여 시간 절약)
-            markets_to_analyze = [m for m in markets[:20] if m not in open_markets]
+            # 각 코인 분석 (최대 10개만 분석하여 시간 절약)
+            markets_to_analyze = [m for m in markets[:10] if m not in open_markets]
             
             LOGGER.info(f"Starting AI analysis for {len(markets_to_analyze)} markets...")
             
             for idx, market in enumerate(markets_to_analyze, 1):
                 LOGGER.info(f"[{idx}/{len(markets_to_analyze)}] Analyzing {market}...")
                 try:
-                    # 캔들 데이터 가져오기
-                    raw = self.client.get_candles(market, unit=self.candle_unit, count=self.candle_count)
+                    # 캔들 데이터 가져오기 (SSE 스트림용으로는 적은 개수 사용)
+                    raw = self.client.get_candles(market, unit=self.candle_unit, count=min(self.candle_count, 20))
                     if not raw:
                         continue
                     
@@ -641,6 +644,8 @@ class ExecutionEngine:
                             best_signal = signal
                             best_candles = candles_list
                             best_confidence = confidence
+                            # 최고 신뢰도 분석 결과 저장
+                            best_analysis = self.strategy.last_analysis.copy()
                             
                             LOGGER.info(
                                 f"  ✅ Better signal found: {market} {signal.value} "
@@ -660,10 +665,9 @@ class ExecutionEngine:
                 )
                 # 선택된 코인으로 market 업데이트
                 self.market = best_market
-                # 최종 분석 결과 저장 (best_market의 분석 결과)
-                if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
-                    # best_market의 분석 결과를 사용
-                    pass
+                # 최종 분석 결과를 best_market의 분석 결과로 설정
+                if best_analysis:
+                    self.strategy.last_analysis = best_analysis
                 return best_market, best_signal, best_candles
             else:
                 # 신호가 없으면 기존 market 유지
@@ -693,11 +697,16 @@ class ExecutionEngine:
                 self.last_ai_analysis['selected_market'] = selected_market
                 # 타임스탬프 추가
                 self.last_ai_analysis['timestamp'] = datetime.now(UTC).isoformat()
+                
                 # signal을 문자열로 변환 (StrategySignal enum -> string)
-                if hasattr(self.last_ai_analysis.get('signal'), 'value'):
-                    self.last_ai_analysis['signal'] = self.last_ai_analysis['signal'].value
-                elif hasattr(self.last_ai_analysis.get('signal'), 'name'):
-                    self.last_ai_analysis['signal'] = self.last_ai_analysis['signal'].name
+                signal_obj = self.last_ai_analysis.get('signal')
+                if signal_obj is not None:
+                    if hasattr(signal_obj, 'value'):
+                        self.last_ai_analysis['signal'] = signal_obj.value
+                    elif hasattr(signal_obj, 'name'):
+                        self.last_ai_analysis['signal'] = signal_obj.name
+                    else:
+                        self.last_ai_analysis['signal'] = str(signal_obj)
                 
                 LOGGER.info(f"AI analysis saved: market={selected_market}, signal={self.last_ai_analysis.get('signal')}, confidence={self.last_ai_analysis.get('confidence', 0):.2%}")
             else:
@@ -818,6 +827,37 @@ class ExecutionEngine:
                         volume=str(balance),
                         ord_type="market",
                     )
+                    
+                    # 거래 내역 기록
+                    if self.trade_history_store:
+                        try:
+                            # 기존 포지션 찾기 및 닫기
+                            positions = self.trade_history_store.get_open_positions(market=market)
+                            for pos in positions:
+                                # 포지션 닫기 (close_position이 자동으로 pnl 계산)
+                                self.trade_history_store.close_position(
+                                    position_id=pos["id"],
+                                    exit_price=current_price,
+                                    exit_volume=balance,
+                                    exit_amount=sell_amount,
+                                )
+                            
+                            # 거래 기록 저장
+                            self.trade_history_store.save_trade(
+                                market=market,
+                                strategy="force_exit",
+                                signal="FORCE_SELL",
+                                side="sell",
+                                price=current_price,
+                                volume=balance,
+                                amount=sell_amount,
+                                order_id=order.get("uuid"),
+                                order_response=order,
+                                dry_run=self.dry_run,
+                            )
+                            LOGGER.info(f"Force exit trade recorded: {market}")
+                        except Exception as e:
+                            LOGGER.error(f"Failed to record force exit trade for {market}: {e}", exc_info=True)
                     
                     results["sells"].append({
                         "market": market,
