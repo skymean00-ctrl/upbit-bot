@@ -311,24 +311,29 @@ class ExecutionEngine:
 
         if signal is StrategySignal.BUY:
             if self.position_price is not None:
-                LOGGER.debug("Position already open for %s; ignoring BUY signal.", self.market)
+                LOGGER.warning("⚠️ BUY SIGNAL IGNORED: Position already open for %s (price: %.0f, volume: %.6f)", 
+                              self.market, self.position_price, self.position_volume or 0.0)
                 return None
             
             # 포트폴리오 체크: 최대 5개 포지션
             if not self.can_open_new_position():
                 # 최대 개수 모두 찼으면 가장 나쁜 포지션 청산
-                LOGGER.info(f"Portfolio full ({MAX_POSITIONS} positions). Liquidating worst position...")
+                LOGGER.warning(f"⚠️ BUY SIGNAL BLOCKED: Portfolio full ({MAX_POSITIONS} positions). Attempting to liquidate worst position...")
                 liquidate_result = self.liquidate_worst_position()
                 if not liquidate_result.get("success"):
-                    LOGGER.warning(f"Failed to liquidate worst position: {liquidate_result.get('error')}")
+                    LOGGER.error(f"❌ BUY SIGNAL CANCELLED: Failed to liquidate worst position: {liquidate_result.get('error')}")
                     return None
                 # 청산 후 새로운 포지션 매수
-                LOGGER.info(f"Worst position liquidated, proceeding with new buy signal")
+                LOGGER.info(f"✅ Portfolio space created, proceeding with BUY signal")
             
             if self.risk_manager and not self.risk_manager.can_open_position(self.market):
+                LOGGER.warning("⚠️ BUY SIGNAL BLOCKED: Risk manager rejected opening position for %s", self.market)
                 return None
             stake = self._determine_order_amount()
             est_volume = stake / last_candle.close if last_candle.close else 0.0
+            
+            LOGGER.info("💰 BUY SIGNAL PROCESSING: market=%s, stake=%.0f KRW, estimated_volume=%.6f, price=%.0f", 
+                       self.market, stake, est_volume, last_candle.close)
             if self.dry_run:
                 LOGGER.info(
                     "Dry-run buy: market=%s stake=%.0fKRW volume~%.6f",
@@ -440,16 +445,16 @@ class ExecutionEngine:
             return response
 
         if self.position_price is None:
-            LOGGER.debug("No open position for %s; ignoring SELL signal.", self.market)
+            LOGGER.warning("⚠️ SELL SIGNAL IGNORED: No open position for %s", self.market)
             return None
 
         # 매도 처리 (신호 발생 시 무조건 매도, 필요시 추가 매수)
         sell_amount = (self.position_volume or 0.0) * last_candle.close
         if not self._can_sell(sell_amount, last_candle):
-        LOGGER.warning(
-            "⚠️ SELL signal failed: position value %.0f KRW, unable to execute (insufficient balance or data)",
-            sell_amount
-        )
+            LOGGER.warning(
+                "⚠️ SELL signal failed: position value %.0f KRW, unable to execute (insufficient balance or data)",
+                sell_amount
+            )
             return None
 
         pnl_pct = (
@@ -686,7 +691,13 @@ class ExecutionEngine:
         # AI 전략이면 여러 코인 분석, 아니면 기존 방식
         selected_market, signal, candles = self._analyze_multiple_markets()
         
-        LOGGER.info("Strategy %s signal: %s for %s", self.strategy.name, signal.value, selected_market)
+        # 시그널 발생 여부 명확히 로깅
+        if signal is StrategySignal.BUY:
+            LOGGER.info("🟢 BUY SIGNAL DETECTED: Strategy %s -> BUY for %s", self.strategy.name, selected_market)
+        elif signal is StrategySignal.SELL:
+            LOGGER.info("🔴 SELL SIGNAL DETECTED: Strategy %s -> SELL for %s", self.strategy.name, selected_market)
+        else:
+            LOGGER.info("⚪ HOLD SIGNAL: Strategy %s -> HOLD for %s", self.strategy.name, selected_market)
         
         # AI 전략인 경우 분석 결과 저장
         if self.strategy.name == "ai_market_analyzer":
