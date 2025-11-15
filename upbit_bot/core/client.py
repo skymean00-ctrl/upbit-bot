@@ -107,6 +107,42 @@ class UpbitClient:
         data = self._request("GET", "/ticker", params={"markets": market})
         return data[0] if data else None
     
+    def get_tickers(self, markets: list[str] | None = None) -> Any:
+        """
+        여러 마켓의 티커 조회 (인증 불필요).
+
+        Args:
+            markets: 마켓 리스트 (None이면 모든 마켓)
+
+        Returns:
+            티커 데이터 리스트
+        """
+        # Public API 사용
+        url = f"{self.REST_ENDPOINT}/ticker"
+        params: dict[str, Any] = {}
+        
+        if markets:
+            # 한 번에 최대 100개까지 가능
+            if len(markets) > 100:
+                # 여러 번 나눠서 조회
+                all_tickers = []
+                for i in range(0, len(markets), 100):
+                    batch = markets[i:i + 100]
+                    params["markets"] = ",".join(batch)
+                    response = self.session.request("GET", url, params=params, timeout=self.timeout)
+                    if response.status_code == 200:
+                        all_tickers.extend(response.json())
+                    else:
+                        LOGGER.warning(f"티커 조회 실패 (배치 {i//100 + 1}): {response.status_code}")
+                return all_tickers
+            else:
+                params["markets"] = ",".join(markets)
+        
+        response = self.session.request("GET", url, params=params, timeout=self.timeout)
+        if response.status_code >= 400:
+            raise UpbitAPIError(f"{response.status_code} {response.text}")
+        return response.json()
+    
     def get_all_markets(self) -> Any:
         """모든 마켓 정보 조회 (인증 불필요)"""
         # Public API 사용

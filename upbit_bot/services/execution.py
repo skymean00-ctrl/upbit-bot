@@ -692,9 +692,16 @@ class ExecutionEngine:
                     if is_high_risk
                     else 0.6
                 )
+                # 분산 모드 확인
+                import os
+                use_distributed = os.getenv("USE_DISTRIBUTED_SCANNER", "false").lower() == "true"
+                remote_scanner_url = os.getenv("SCANNER_API_URL")
+                
                 dual_engine = DualOllamaEngine(
                     confidence_threshold=confidence_threshold,
                     high_risk=is_high_risk,
+                    use_distributed=use_distributed,
+                    remote_scanner_url=remote_scanner_url,
                 )
             
             # 거래량 상위 100개 코인 가져오기 (하이브리드 방식: 상위 100개만 스캔)

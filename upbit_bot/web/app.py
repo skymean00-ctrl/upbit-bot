@@ -10,7 +10,7 @@ from threading import Thread
 from typing import Any, AsyncGenerator, Optional
 
 import requests
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from upbit_bot.config import Settings, load_settings
@@ -187,7 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 환경변수 DRY_RUN이 True면 dry-run 모드, 그 외에는 live 모드
     import os
     default_dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
-    
+
     engine = ExecutionEngine(
         client=client,
         strategy=strategy,
@@ -586,7 +586,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         
                         # 분석 결과가 여전히 없거나 분석 중이면 상태 정보 제공
                         if not ai_analysis or analysis_in_progress:
-                            # Ollama 연결 확인 (더 상세한 검사)
+                            # Ollama 연결 확인 (더 상세한 검사) - 먼저 확인하여 분석 상태를 결정
                             ollama_status = "disconnected"
                             ollama_error = None
                             try:
@@ -607,8 +607,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     LOGGER.warning(f"Ollama 응답 오류: {ollama_error}")
                             except requests.exceptions.Timeout:
                                 ollama_status = "timeout"
-                                ollama_error = "연결 시간 초과 (3초)"
-                                LOGGER.warning(f"Ollama 연결 시간 초과")
+                                ollama_error = "연결 시간 초과 (3초) - 노트북 Ollama 서버 응답 없음"
+                                LOGGER.warning(f"Ollama 연결 시간 초과 - 노트북이 슬립 모드이거나 Ollama 서버가 응답하지 않음")
                             except requests.exceptions.ConnectionError as e:
                                 ollama_status = "disconnected"
                                 ollama_error = f"연결 오류: {str(e)[:100]}"
@@ -618,8 +618,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 ollama_error = f"예기치 않은 오류: {str(e)[:100]}"
                                 LOGGER.error(f"Ollama 확인 중 오류: {e}", exc_info=True)
                             
-                            # 분석 중이면 "analyzing" 상태, 아니면 "waiting" 또는 에러 상태
-                            if analysis_in_progress:
+                            # Ollama 연결 실패 시 분석 플래그 초기화
+                            if ollama_status in ["disconnected", "timeout", "error", "model_missing"]:
+                                # 분석 진행 중이었더라도 Ollama가 응답하지 않으면 플래그 초기화
+                                if analysis_in_progress:
+                                    LOGGER.warning(f"Ollama 서버 응답 없음 - 분석 플래그 초기화 (status: {ollama_status})")
+                                    analysis_in_progress = False
+                                    engine = controller.engine
+                                    if hasattr(engine, '_analysis_in_progress'):
+                                        engine._analysis_in_progress = False
+                                status = "ollama_disconnected"
+                            elif analysis_in_progress:
+                                # Ollama가 연결되어 있고 분석 중이면 "analyzing" 상태
                                 status = "analyzing"
                             elif ollama_status == "connected":
                                 # Ollama가 연결되어 있으면 분석을 시작해야 하므로 "analyzing"으로 표시
@@ -909,6 +919,99 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=400,
             )
 
+    @app.get("/api/scan-results")
+    async def get_scan_results(
+        limit: int = Query(50, ge=1, le=100),
+        max_age_minutes: int = Query(5, ge=1, le=60),
+        min_score: float = Query(0.0, ge=0.0, le=1.0),
+    ) -> JSONResponse:
+        """스캔 결과 조회"""
+        try:
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+            
+            try:
+                from upbit_bot.database.redis_store import RedisScanStore
+                
+                store = RedisScanStore(redis_url)
+                
+                max_age_seconds = max_age_minutes * 60
+                results = store.get_scan_results(max_age_seconds=max_age_seconds)
+                
+                # 필터링
+                filtered = [r for r in results if float(r.get('score', 0)) >= min_score]
+                
+                return JSONResponse({
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "count": len(filtered[:limit]),
+                    "max_age_minutes": max_age_minutes,
+                    "results": filtered[:limit]
+                })
+            except ImportError:
+                LOGGER.error("Redis 스토어를 사용할 수 없습니다. redis 모듈이 설치되어 있는지 확인하세요.")
+                return JSONResponse({
+                    "error": "Redis 스토어를 사용할 수 없습니다",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "count": 0,
+                    "results": []
+                }, status_code=503)
+        except Exception as e:
+            LOGGER.error(f"스캔 결과 조회 실패: {e}", exc_info=True)
+            return JSONResponse({
+                "error": str(e),
+                "timestamp": datetime.now(UTC).isoformat(),
+                "count": 0,
+                "results": []
+            }, status_code=500)
+
+    @app.get("/api/scanner/health")
+    async def scanner_health() -> JSONResponse:
+        """스캐너 헬스체크"""
+        try:
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+            
+            try:
+                from upbit_bot.database.redis_store import RedisScanStore
+                
+                store = RedisScanStore(redis_url)
+                
+                results = store.get_scan_results(max_age_seconds=600)
+                
+                if not results:
+                    return JSONResponse({
+                        "status": "no_data",
+                        "message": "최근 10분 이내 스캔 결과 없음"
+                    })
+                
+                latest = max(results, key=lambda x: x.get('timestamp', ''))
+                latest_timestamp_str = latest.get('timestamp', '')
+                
+                if latest_timestamp_str:
+                    latest_timestamp = datetime.fromisoformat(latest_timestamp_str.replace("Z", "+00:00"))
+                    age = (datetime.now(UTC) - latest_timestamp).total_seconds()
+                    
+                    return JSONResponse({
+                        "status": "healthy" if age < 300 else "stale",
+                        "last_scan_age_seconds": age,
+                        "total_coins_scanned": len(results),
+                        "latest_timestamp": latest_timestamp_str
+                    })
+                else:
+                    return JSONResponse({
+                        "status": "unknown",
+                        "message": "타임스탬프 정보 없음"
+                    })
+            except ImportError:
+                return JSONResponse({
+                    "status": "error",
+                    "message": "Redis 스토어를 사용할 수 없습니다"
+                })
+        except Exception as e:
+            LOGGER.error(f"스캐너 헬스체크 실패: {e}", exc_info=True)
+            return JSONResponse({
+                "status": "error",
+                "message": str(e)
+            })
+
     return app
 
 
@@ -1133,6 +1236,32 @@ def _render_dashboard(
                     <h3 class="text-sm font-semibold text-red-800 dark:text-red-200 mb-1">⚠️ Ollama 연결 끊김</h3>
                     <p class="text-sm text-red-700 dark:text-red-300">AI 시장 분석 서비스를 사용할 수 없습니다. 노트북의 Ollama 서버 상태를 확인해주세요. (IP: 100.98.189.30:11434)</p>
     </div>
+            </div>
+        </div>
+
+        <!-- 스캐너 상태 카드 -->
+        <div class="mb-6 card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <span class="text-xl">📡</span>
+                <span>서버 스캐너 상태</span>
+            </h3>
+            <div id="scanner-status" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                    <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">상태</p>
+                    <p class="text-sm font-semibold text-gray-900 dark:text-white" id="scanner-health">확인 중...</p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">마지막 스캔</p>
+                    <p class="text-sm font-semibold text-gray-900 dark:text-white" id="last-scan-time">-</p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">스캔된 코인</p>
+                    <p class="text-sm font-semibold text-gray-900 dark:text-white" id="scanned-coins">-</p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">데이터 신선도</p>
+                    <p class="text-sm font-semibold text-gray-900 dark:text-white" id="data-freshness">-</p>
+                </div>
             </div>
         </div>
 
@@ -2687,18 +2816,8 @@ def _render_dashboard(
                     modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-orange-500 to-red-600 text-white';
                 }}
             }}
-            
-            // 페이지 상단의 거래 모드 배지 업데이트
-            const topModeBadges = document.querySelectorAll('.px-5.py-2.5.rounded-xl.shadow-lg.font-bold.text-sm');
-            topModeBadges.forEach(badge => {{
-                if (isDryRun) {{
-                    badge.textContent = 'DRY-RUN';
-                    badge.className = 'px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm bg-gradient-to-r from-blue-500 to-blue-600 text-white dark:from-blue-600 dark:to-blue-700';
-                }} else {{
-                    badge.textContent = 'LIVE';
-                    badge.className = 'px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm bg-gradient-to-r from-orange-500 to-red-600 text-white dark:from-orange-600 dark:to-red-700';
-                }}
-            }});
+
+            // 페이지 상단의 거래 모드 배지 업데이트 (기존 요소가 없으므로 생략)
         }}
         
         // 거래 모드 버튼 처리 (즉시 적용)
@@ -2906,21 +3025,8 @@ def _render_dashboard(
                             modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-orange-500 to-red-600 text-white';
                         }}
                     }}
-                    
-                    // 페이지 상단 거래 모드 업데이트 - 명시적 값 확인
-                    const topModeBadges = document.querySelectorAll('.px-5.py-2.5.rounded-xl.shadow-lg.font-bold.text-sm');
-                    if (topModeBadges.length > 0) {{
-                        const isDryRun = data.dry_run === true;
-                        topModeBadges.forEach(badge => {{
-                            if (isDryRun) {{
-                                badge.textContent = 'DRY-RUN';
-                                badge.className = 'px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm bg-gradient-to-r from-blue-500 to-blue-600 text-white dark:from-blue-600 dark:to-blue-700';
-                            }} else {{
-                                badge.textContent = 'LIVE';
-                                badge.className = 'px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm bg-gradient-to-r from-orange-500 to-red-600 text-white dark:from-orange-600 dark:to-red-700';
-                            }}
-                        }});
-                    }}
+
+                    // 페이지 상단 거래 모드 업데이트 (기존 요소가 없으므로 생략)
                     
                     // 마지막 실행 시간 업데이트
                     if (lastRunTime && data.last_run_at) {{
@@ -3118,6 +3224,82 @@ def _render_dashboard(
                 }}
             }});
         }}
+        
+        // 스캐너 상태 업데이트 함수
+        async function updateScannerStatus() {{
+            try {{
+                const response = await fetch('/api/scanner/health');
+                const data = await response.json();
+                
+                const healthEl = document.getElementById('scanner-health');
+                const lastScanEl = document.getElementById('last-scan-time');
+                const scannedCoinsEl = document.getElementById('scanned-coins');
+                const freshnessEl = document.getElementById('data-freshness');
+                
+                if (healthEl) {{
+                    if (data.status === 'healthy') {{
+                        healthEl.textContent = '정상';
+                        healthEl.className = 'text-sm font-semibold text-green-600 dark:text-green-400';
+                    }} else if (data.status === 'stale') {{
+                        healthEl.textContent = '지연됨';
+                        healthEl.className = 'text-sm font-semibold text-yellow-600 dark:text-yellow-400';
+                    }} else if (data.status === 'no_data') {{
+                        healthEl.textContent = '데이터 없음';
+                        healthEl.className = 'text-sm font-semibold text-gray-500 dark:text-gray-400';
+                    }} else {{
+                        healthEl.textContent = '오류';
+                        healthEl.className = 'text-sm font-semibold text-red-600 dark:text-red-400';
+                    }}
+                }}
+                
+                if (lastScanEl) {{
+                    if (data.last_scan_age_seconds !== undefined) {{
+                        const ageSeconds = Math.floor(data.last_scan_age_seconds);
+                        const ageMinutes = Math.floor(ageSeconds / 60);
+                        if (ageMinutes > 0) {{
+                            lastScanEl.textContent = ageMinutes + '분 전';
+                        }} else {{
+                            lastScanEl.textContent = ageSeconds + '초 전';
+                        }}
+                    }} else {{
+                        lastScanEl.textContent = '-';
+                    }}
+                }}
+                
+                if (scannedCoinsEl) {{
+                    scannedCoinsEl.textContent = data.total_coins_scanned || '-';
+                }}
+                
+                if (freshnessEl) {{
+                    if (data.last_scan_age_seconds !== undefined) {{
+                        if (data.last_scan_age_seconds < 60) {{
+                            freshnessEl.textContent = '신선';
+                            freshnessEl.className = 'text-sm font-semibold text-green-600 dark:text-green-400';
+                        }} else if (data.last_scan_age_seconds < 120) {{
+                            freshnessEl.textContent = '보통';
+                            freshnessEl.className = 'text-sm font-semibold text-yellow-600 dark:text-yellow-400';
+                        }} else {{
+                            freshnessEl.textContent = '오래됨';
+                            freshnessEl.className = 'text-sm font-semibold text-red-600 dark:text-red-400';
+                        }}
+                    }} else {{
+                        freshnessEl.textContent = '-';
+                        freshnessEl.className = 'text-sm font-semibold text-gray-500 dark:text-gray-400';
+                    }}
+                }}
+            }} catch (e) {{
+                console.error('스캐너 상태 조회 실패:', e);
+                const healthEl = document.getElementById('scanner-health');
+                if (healthEl) {{
+                    healthEl.textContent = '조회 실패';
+                    healthEl.className = 'text-sm font-semibold text-red-600 dark:text-red-400';
+                }}
+            }}
+        }}
+        
+        // 30초마다 스캐너 상태 업데이트
+        setInterval(updateScannerStatus, 30000);
+        updateScannerStatus();
     </script>
 </body>
 </html>"""

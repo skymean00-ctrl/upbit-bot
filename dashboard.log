@@ -1,0 +1,547 @@
+INFO:     Started server process [383166]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     127.0.0.1:54926 - "GET /api/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48442 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:54940 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46980 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45964 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51036 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51036 - "GET /status HTTP/1.1" 200 OK
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:51036 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60998 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60998 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60998 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60998 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60998 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60998 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-MBL 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45698 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45698 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45698 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57342 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57342 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57342 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57342 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60092 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60092 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60092 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60018 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60018 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60018 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59834 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59834 - "GET /status HTTP/1.1" 200 OK
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+Ollama 연결 시간 초과
+INFO:     127.0.0.1:59834 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44348 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59834 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59834 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-IOST 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+Ollama 요청 시간 초과 (60초)
+코인 KRW-LINEA 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:59834 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46800 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46800 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46800 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46800 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46800 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46800 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46800 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46800 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45530 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45530 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45530 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45530 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45530 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45530 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45530 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34928 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34928 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34928 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54750 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "POST /start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54522 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52700 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52700 - "GET /status HTTP/1.1" 200 OK
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:52700 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34730 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34730 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34730 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48586 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48586 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48586 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48586 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48586 - "GET /status HTTP/1.1" 200 OK
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:48586 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51020 - "GET /status HTTP/1.1" 200 OK
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51044 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51028 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40442 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40442 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-BONK 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 요청 시간 초과 (60초)
+코인 KRW-XEC 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 요청 시간 초과 (60초)
+코인 KRW-TOSHI 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:40442 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ANIME 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:53502 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53502 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53502 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60080 - "GET /status HTTP/1.1" 200 OK
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:60080 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46948 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46948 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46954 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46954 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46954 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-PUMP 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 요청 시간 초과 (60초)
+코인 KRW-BLAST 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 요청 시간 초과 (60초)
+코인 KRW-MINA 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ZIL 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:50730 - "GET / HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-XLM 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:50730 - "GET /trades?limit=100 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50732 - "GET /api/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /statistics?today_only=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /statistics?today_only=false HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-LSK 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52682 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-TRUST 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:50736 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47252 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47252 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-G 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47252 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47260 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47260 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47260 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58246 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-STRAX 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:58246 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58246 - "GET /trades?limit=100 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57656 - "GET /api/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57668 - "GET /statistics?today_only=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57668 - "GET /statistics?today_only=false HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-KAVA 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:57668 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57668 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-XLM 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:57676 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45816 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45816 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45822 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45822 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45822 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-QKC 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-DKA 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SNT 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:38318 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45228 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45228 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-AVNT 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45228 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45228 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45228 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45228 - "GET /trades?limit=100 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /statistics?today_only=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45258 - "GET /api/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /statistics?today_only=false HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-GLM 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-USDT 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-XRP 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-VTHO 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+Ollama 요청 시간 초과 (60초)
+코인 KRW-T 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60544 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ANKR 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SOPH 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-1INCH 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45244 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33358 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-FIL 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:33358 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33358 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-MOVE 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:33358 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40688 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-DKA 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:40688 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40688 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40688 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40688 - "GET /trades?limit=100 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43198 - "GET /statistics?today_only=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43182 - "GET /api/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43198 - "GET /statistics?today_only=false HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43198 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-WLFI 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:43198 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43198 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37708 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37708 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37708 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37710 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37710 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-W 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:37710 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-VIRTUAL 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:44316 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44316 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-AERGO 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:44316 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-GRT 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:44316 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55366 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ANKR 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:55366 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SOPH 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:55366 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55366 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55366 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SC 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:55366 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46262 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46262 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46262 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46262 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ENA 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:46262 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46262 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46262 - "GET /trades?limit=100 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56734 - "GET /statistics?today_only=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56748 - "GET /api/stream HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-MMT 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:56734 - "GET /statistics?today_only=false HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56734 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56734 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56734 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57556 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57556 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57556 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-IN 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:40398 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-MOODENG 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:40398 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SEI 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:40398 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-BIGTIME 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:48040 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48040 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-VIRTUAL 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:48040 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48040 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41858 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-HBAR 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:41858 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41858 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49938 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49938 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49938 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ONDO 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-WAXP 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-TRX 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-BOUNTY 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ARB 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-IN 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-MED 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-RVN 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:38096 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47496 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-XPL 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47496 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-MINA 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47496 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47496 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47496 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-MOODENG 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47496 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-BLUR 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-PYTH 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-WAXP 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-POLYX 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ADA 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-FF 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-G 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-BIO 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ALT 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SIGN 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+INFO:     127.0.0.1:47386 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SUN 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-NXPC 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ALGO 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-STX 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-PYTH 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-ASTR 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SAFE 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-BORA 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-BIO 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SIGN 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 요청 시간 초과 (60초)
+코인 KRW-SUN 스캔 실패: Ollama 요청 시간 초과 (60초)
+Ollama 서버 연결 시간 초과: http://100.98.189.30:11434
+Ollama 요청 시간 초과 (60초)
+코인 KRW-AVNT 스캔 실패: Ollama 요청 시간 초과 (60초)
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55604 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51156 - "GET /status HTTP/1.1" 200 OK
+Ollama 요청 시간 초과 (60초)
+코인 KRW-CKB 스캔 실패: Ollama 요청 시간 초과 (60초)

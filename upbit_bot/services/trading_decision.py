@@ -32,6 +32,126 @@ class TradingDecisionMaker:
         self.high_risk = high_risk
         self.last_decision: dict[str, Any] | None = None
 
+    def select_top_candidates(
+        self,
+        scan_results: list[dict[str, Any]],
+        current_positions: list[str],
+        max_positions: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        스캔 결과에서 상위 10개 선정.
+
+        선정 기준:
+        1. 이미 보유 중인 코인 제외
+        2. 고위험 제외 (일반 모드인 경우)
+        3. 최소 점수 필터링 (0.6 이상)
+        4. 거래량 기준 정렬 (유동성)
+        5. 상위 20개에서 점수 기준 재정렬
+        6. 최종 10개 선정
+
+        Args:
+            scan_results: 스캔 결과 리스트
+            current_positions: 현재 보유 중인 코인 리스트
+            max_positions: 최대 선택 개수 (기본값: 10)
+
+        Returns:
+            선정된 코인 리스트 (점수 내림차순)
+        """
+        # 1. 이미 보유 중인 코인 제외
+        available = [
+            r for r in scan_results if r.get("market", "") not in current_positions
+        ]
+
+        LOGGER.debug(
+            f"보유 코인 제외: {len(scan_results)} → {len(available)}개 "
+            f"(제외: {len(current_positions)}개)"
+        )
+
+        # 2. 고위험 제외 (일반 모드인 경우)
+        if not self.high_risk:
+            available = [r for r in available if r.get("risk", "").lower() != "high"]
+
+            LOGGER.debug(f"고위험 제외: {len(available)}개 남음")
+
+        # 3. 최소 점수 필터링
+        available = [
+            r for r in available if float(r.get("score", 0)) >= self.confidence_threshold
+        ]
+
+        LOGGER.debug(f"최소 점수 필터링 ({self.confidence_threshold}): {len(available)}개 남음")
+
+        # 4. 거래량 기준 정렬 (유동성)
+        available.sort(key=lambda x: float(x.get("volume_24h", 0)), reverse=True)
+
+        # 5. 상위 20개에서 점수 기준 재정렬
+        top_20_by_volume = available[:20]
+        top_20_by_volume.sort(key=lambda x: float(x.get("score", 0)), reverse=True)
+
+        # 6. 최종 10개 선정
+        final = top_20_by_volume[:max_positions]
+
+        LOGGER.info(
+            f"후보 선정: {len(scan_results)} → {len(available)} → {len(final)}개 "
+            f"(최종 선정 기준: 거래량 상위 20개 중 점수 상위 {max_positions}개)"
+        )
+
+        return final
+
+    def analyze_from_remote_scan(
+        self,
+        scan_results: list[dict[str, Any]],
+        current_portfolio: dict[str, Any],
+        market_context: dict[str, Any],
+    ) -> tuple[StrategySignal, str | None, float, dict[str, Any]]:
+        """
+        원격 스캔 결과 기반 매매 결정.
+
+        Args:
+            scan_results: 서버에서 가져온 스캔 결과 리스트
+            current_portfolio: 현재 포트폴리오 정보
+            market_context: 전체 시장 상황
+
+        Returns:
+            (signal, selected_market, confidence, analysis_data)
+        """
+        # 현재 포지션 추출
+        open_positions = current_portfolio.get("open_positions", [])
+        current_positions = [
+            pos.get("market", "") for pos in open_positions if pos.get("market")
+        ]
+
+        # 상위 10개 선정
+        candidates = self.select_top_candidates(
+            scan_results, current_positions, max_positions=10
+        )
+
+        if not candidates:
+            LOGGER.info("매수 후보 없음")
+            return StrategySignal.HOLD, None, 0.0, {}
+
+        # 최고 점수 코인 선택
+        best = candidates[0]
+        selected_market = best.get("market", "")
+        confidence = float(best.get("score", 0.0))
+
+        # 매수 시그널 생성
+        analysis_data = {
+            "selected_market": selected_market,
+            "confidence": confidence,
+            "reason": best.get("reason", ""),
+            "trend": best.get("trend", ""),
+            "risk": best.get("risk", "medium"),
+            "candidates": [c.get("market", "") for c in candidates if c.get("market")],
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+        LOGGER.info(
+            f"매매 결정: {selected_market} BUY (신뢰도 {confidence:.2%}, "
+            f"후보: {len(candidates)}개)"
+        )
+
+        return StrategySignal.BUY, selected_market, confidence, analysis_data
+
     def make_decision(
         self,
         coin_analyses: dict[str, dict[str, Any]],
