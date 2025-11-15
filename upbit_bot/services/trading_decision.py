@@ -57,7 +57,7 @@ class TradingDecisionMaker:
         sorted_analyses = sorted(
             coin_analyses.items(), key=lambda x: x[1].get("score", 0.0), reverse=True
         )
-        top_5 = sorted_analyses[:5]
+        top_10 = sorted_analyses[:10]  # 상위 10개 선택
 
         prompt = f"""당신은 암호화폐 거래 전문가입니다.
 다음 정보를 종합하여 최종 매매 결정을 내리세요.
@@ -65,8 +65,8 @@ class TradingDecisionMaker:
 [현재 시간]
 {datetime.now(UTC).isoformat()}
 
-[코인 분석 결과 (Ollama 1 스캔)]
-{self._format_coin_analyses(dict(top_5))}
+[코인 분석 결과 (Ollama 1 스캔 - 상위 10개)]
+{self._format_coin_analyses(dict(top_10))}
 
 [현재 포트폴리오]
 {self._format_portfolio(current_portfolio)}

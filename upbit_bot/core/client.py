@@ -141,6 +141,53 @@ class UpbitClient:
             raise UpbitAPIError(f"{response.status_code} {response.text}")
         return response.json()
     
+    def get_orders(
+        self,
+        state: str = "done",
+        market: str | None = None,
+        page: int = 1,
+        limit: int = 100,
+        order_by: str = "desc",
+    ) -> Any:
+        """
+        주문 내역 조회 (사용자가 직접 거래한 내용 포함).
+        
+        Args:
+            state: 주문 상태 ('wait', 'watch', 'done', 'cancel')
+            market: 마켓 ID (예: 'KRW-BTC', None이면 전체)
+            page: 페이지 번호
+            limit: 요청 개수 (기본값: 100, 최대: 100)
+            order_by: 정렬 방식 ('asc' 또는 'desc')
+        
+        Returns:
+            주문 내역 리스트
+        """
+        params: dict[str, Any] = {
+            "state": state,
+            "page": str(page),
+            "limit": str(min(limit, 100)),  # 최대 100개
+            "order_by": order_by,
+        }
+        if market:
+            params["market"] = market
+        
+        query_string = urlencode(params)
+        query_hash = sha512(query_string.encode()).hexdigest()
+        
+        headers = self._headers(
+            extra_payload={"query_hash": query_hash, "query_hash_alg": "SHA512"},
+        )
+        response = self.session.request(
+            "GET",
+            f"{self.REST_ENDPOINT}/orders",
+            headers=headers,
+            params=params,
+            timeout=self.timeout,
+        )
+        if response.status_code >= 400:
+            raise UpbitAPIError(f"{response.status_code} {response.text}")
+        return response.json()
+    
     def get_krw_markets(self) -> list[str]:
         """KRW 마켓 목록 가져오기"""
         try:

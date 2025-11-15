@@ -697,9 +697,9 @@ class ExecutionEngine:
                     high_risk=is_high_risk,
                 )
             
-            # 거래량 상위 10개 코인 가져오기
-            markets = self.client.get_top_volume_markets(limit=10)
-            LOGGER.info(f"거래량 상위 10개 코인 선택: {markets}")
+            # 거래량 상위 100개 코인 가져오기 (하이브리드 방식: 상위 100개만 스캔)
+            markets = self.client.get_top_volume_markets(limit=100)
+            LOGGER.info(f"거래량 상위 100개 코인 선택: {len(markets)}개")
             
             # 이미 포지션이 있는 코인은 제외
             portfolio = self.get_portfolio_status()

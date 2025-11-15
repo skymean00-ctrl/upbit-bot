@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+LOGGER = logging.getLogger(__name__)
 
 
 class TradeHistoryStore:
@@ -320,6 +323,132 @@ class TradeHistoryStore:
             "max_loss": max_loss,
         }
 
+    def sync_external_trades(self, client: Any, days: int = 7) -> dict[str, Any]:
+        """
+        외부 거래 내역 동기화 (사용자가 직접 거래한 내용).
+        
+        Args:
+            client: UpbitClient 인스턴스
+            days: 동기화할 일수 (미사용, 최근 100개 주문 조회)
+        
+        Returns:
+            동기화 결과 딕셔너리
+        """
+        try:
+            LOGGER.info("외부 거래 내역 동기화 시작...")
+            
+            # 최근 완료된 주문 조회 (최대 100개)
+            orders = client.get_orders(state="done", limit=100, order_by="desc")
+            
+            if not orders:
+                LOGGER.info("동기화할 주문이 없습니다.")
+                return {"success": True, "synced": 0, "errors": []}
+            
+            synced = 0
+            skipped = 0
+            errors = []
+            
+            for order in orders:
+                try:
+                    order_id = order.get("uuid")
+                    if not order_id:
+                        continue
+                    
+                    # order_id로 중복 체크
+                    existing = self._conn.execute(
+                        "SELECT id FROM trades WHERE order_id = ?", (order_id,)
+                    ).fetchone()
+                    
+                    if existing:
+                        skipped += 1
+                        continue  # 이미 있으면 스킵
+                    
+                    # 주문 정보 추출
+                    market = order.get("market")
+                    side = order.get("side")  # "bid" or "ask"
+                    order_type = order.get("ord_type")
+                    state = order.get("state")
+                    
+                    if state != "done":
+                        continue
+                    
+                    # 체결 정보 추출
+                    executed_volume = float(order.get("executed_volume", 0))
+                    avg_price = float(order.get("avg_price", 0))
+                    
+                    if executed_volume <= 0 or avg_price <= 0:
+                        continue
+                    
+                    # 실제 체결 금액 계산
+                    actual_amount = avg_price * executed_volume
+                    
+                    # 거래 내역으로 변환
+                    signal = "BUY" if side == "bid" else "SELL"
+                    trade_side = "buy" if side == "bid" else "sell"
+                    
+                    # 거래 저장
+                    trade_id = self.save_trade(
+                        market=market,
+                        strategy="manual",  # 사용자 직접 거래
+                        signal=signal,
+                        side=trade_side,
+                        price=avg_price,
+                        volume=executed_volume,
+                        amount=actual_amount,
+                        order_id=order_id,
+                        order_response=order,
+                        dry_run=False,
+                    )
+                    
+                    # 매수 시 포지션 생성, 매도 시 포지션 닫기
+                    if side == "bid":
+                        # 매수: 포지션 생성 (이미 있는 포지션은 스킵)
+                        existing_positions = self.get_open_positions(market=market)
+                        if not existing_positions:
+                            # 새 포지션 생성
+                            self.save_position(
+                                market=market,
+                                strategy="manual",
+                                entry_price=avg_price,
+                                entry_volume=executed_volume,
+                                entry_amount=actual_amount,
+                            )
+                            LOGGER.debug(f"외부 매수 거래로 새 포지션 생성: {market}")
+                        else:
+                            # 이미 포지션이 있으면 추가 매수로 처리 (포지션 업데이트는 생략)
+                            LOGGER.debug(f"외부 매수 거래: 이미 포지션이 있음 ({market}), 스킵")
+                    elif side == "ask":
+                        # 매도: 포지션 닫기
+                        open_positions = self.get_open_positions(market=market)
+                        if open_positions:
+                            position_id = open_positions[0]["id"]
+                            
+                            # 포지션 닫기
+                            self.close_position(
+                                position_id=position_id,
+                                exit_price=avg_price,
+                                exit_volume=executed_volume,
+                                exit_amount=actual_amount,
+                            )
+                            LOGGER.debug(f"외부 매도 거래로 포지션 닫기: {market}")
+                    
+                    synced += 1
+                    LOGGER.debug(f"외부 거래 동기화: {market} {signal} {actual_amount:.0f}원")
+                    
+                except Exception as e:
+                    error_msg = f"주문 {order.get('uuid', 'unknown')} 동기화 실패: {e}"
+                    errors.append(error_msg)
+                    LOGGER.warning(error_msg)
+                    continue
+            
+            LOGGER.info(f"외부 거래 내역 동기화 완료: {synced}개 동기화, {skipped}개 스킵, {len(errors)}개 오류")
+            return {"success": True, "synced": synced, "skipped": skipped, "errors": errors}
+            
+        except Exception as e:
+            error_msg = f"외부 거래 내역 동기화 실패: {e}"
+            LOGGER.error(error_msg, exc_info=True)
+            return {"success": False, "error": error_msg}
+    
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()

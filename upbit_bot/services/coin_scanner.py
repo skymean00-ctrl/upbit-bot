@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import statistics
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from upbit_bot.strategies import Candle
@@ -20,7 +22,7 @@ class CoinScanner:
         self,
         ollama_url: str | None = None,
         model: str | None = None,
-        timeout: int = 30,
+        timeout: int = 5,  # 타임아웃을 5초로 단축 (빠른 실패)
     ) -> None:
         # ollama_url과 model이 None이면 기본값 사용
         url = ollama_url or OLLAMA_BASE_URL
@@ -108,32 +110,61 @@ class CoinScanner:
             return None
 
     def scan_markets(
-        self, markets_data: dict[str, list[Candle]], max_workers: int = 5
+        self, markets_data: dict[str, list[Candle]], max_workers: int = 15
     ) -> dict[str, dict[str, Any]]:
         """
-        여러 코인을 스캔하여 정보 수집.
+        여러 코인을 병렬로 스캔하여 정보 수집.
 
         Args:
             markets_data: {market: [candles]} 딕셔너리
-            max_workers: 최대 동시 처리 수 (현재는 순차 처리, 향후 병렬 처리 가능)
+            max_workers: 최대 동시 처리 수 (기본값: 15)
 
         Returns:
             {market: {score, reason, trend, risk, indicators}} 딕셔너리
         """
         results: dict[str, dict[str, Any]] = {}
+        results_lock = threading.Lock()
 
-        LOGGER.info(f"코인 스캔 시작: {len(markets_data)}개 코인")
-        for idx, (market, candles) in enumerate(markets_data.items(), 1):
-            LOGGER.info(f"[{idx}/{len(markets_data)}] 스캔 중: {market}")
-            result = self.scan_single_market(market, candles)
-            if result:
-                results[market] = result
-                LOGGER.debug(
-                    f"  {market}: score={result['score']:.2f}, "
-                    f"trend={result['trend']}, risk={result['risk']}"
-                )
+        LOGGER.info(f"코인 스캔 시작: {len(markets_data)}개 코인 (병렬 처리: {max_workers}개 동시)")
+
+        def scan_one(market: str, candles: list[Candle]) -> tuple[str, dict[str, Any] | None]:
+            """단일 코인 스캔 래퍼 함수 (병렬 처리용)"""
+            try:
+                result = self.scan_single_market(market, candles)
+                return market, result
+            except Exception as e:
+                LOGGER.warning(f"코인 {market} 스캔 실패: {e}")
+                return market, None
+
+        # 병렬 처리 실행
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(scan_one, market, candles): market
+                for market, candles in markets_data.items()
+            }
+
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                try:
+                    market, result = future.result()
+                    if result:
+                        with results_lock:
+                            results[market] = result
+                            LOGGER.debug(
+                                f"[{completed}/{len(markets_data)}] {market}: "
+                                f"score={result['score']:.2f}, "
+                                f"trend={result['trend']}, risk={result['risk']}"
+                            )
+                    
+                    # 10개마다 진행 상황 로그
+                    if completed % 10 == 0 or completed == len(markets_data):
+                        LOGGER.info(f"스캔 진행: {completed}/{len(markets_data)} 완료 ({len(results)}개 성공)")
+                except Exception as e:
+                    market = futures[future]
+                    LOGGER.warning(f"코인 {market} 스캔 처리 중 오류: {e}")
 
         self.last_scan_result = results
-        LOGGER.info(f"코인 스캔 완료: {len(results)}개 코인 분석됨")
+        LOGGER.info(f"코인 스캔 완료: {len(results)}개 코인 분석됨 (성공률: {len(results)/len(markets_data)*100:.1f}%)")
         return results
 

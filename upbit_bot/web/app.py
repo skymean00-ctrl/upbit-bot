@@ -339,8 +339,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def stream_updates() -> StreamingResponse:
         """Server-Sent Events stream for real-time updates."""
         async def generate() -> AsyncGenerator[str, None]:
+            # 마지막 거래 내역 동기화 시간 추적 (app.state에 저장하여 공유)
+            SYNC_INTERVAL = 300  # 5분 (초)
+            
             while True:
                 try:
+                    # 주기적 거래 내역 동기화 (5분마다)
+                    current_time = datetime.now(UTC)
+                    last_sync_time = getattr(app.state, '_last_sync_time', None)
+                    should_sync = False
+                    
+                    if last_sync_time is None:
+                        should_sync = True
+                        app.state._last_sync_time = current_time
+                    else:
+                        time_diff = (current_time - last_sync_time).total_seconds()
+                        if time_diff >= SYNC_INTERVAL:
+                            should_sync = True
+                            app.state._last_sync_time = current_time
+                    
+                    if should_sync:
+                        # 백그라운드에서 동기화 실행 (중복 실행 방지)
+                        sync_lock = getattr(app.state, '_sync_lock', None)
+                        if sync_lock is None:
+                            import threading
+                            app.state._sync_lock = threading.Lock()
+                            sync_lock = app.state._sync_lock
+                        
+                        if not sync_lock.locked():
+                            def sync_trades_background():
+                                with sync_lock:
+                                    try:
+                                        result = controller.trade_history_store.sync_external_trades(
+                                            client=controller.engine.client,
+                                            days=7,
+                                        )
+                                        if result.get("success"):
+                                            synced = result.get("synced", 0)
+                                            if synced > 0:
+                                                LOGGER.info(f"자동 거래 내역 동기화 완료: {synced}개 동기화")
+                                    except Exception as e:
+                                        LOGGER.warning(f"자동 거래 내역 동기화 실패: {e}")
+                            
+                            sync_thread = Thread(target=sync_trades_background, daemon=True)
+                            sync_thread.start()
+                    
                     # Get current account overview
                     account = controller.get_account_overview()
                     state = controller.get_state().as_dict()
@@ -741,6 +784,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_markets() -> JSONResponse:
         """사용 가능한 마켓 목록 반환"""
         return JSONResponse({"markets": AVAILABLE_MARKETS})
+
+    @app.post("/api/sync-trades")
+    async def sync_trades() -> JSONResponse:
+        """사용자가 직접 거래한 내역을 동기화."""
+        try:
+            result = controller.trade_history_store.sync_external_trades(
+                client=controller.engine.client,
+                days=7,
+            )
+            
+            if result.get("success"):
+                return JSONResponse({
+                    "success": True,
+                    "message": f"거래 내역 동기화 완료: {result.get('synced', 0)}개 동기화, {result.get('skipped', 0)}개 스킵",
+                    "synced": result.get("synced", 0),
+                    "skipped": result.get("skipped", 0),
+                    "errors": result.get("errors", []),
+                })
+            else:
+                return JSONResponse(
+                    {"success": False, "error": result.get("error", "동기화 실패")},
+                    status_code=400,
+                )
+        except Exception as e:  # noqa: BLE001
+            LOGGER.error(f"거래 내역 동기화 실패: {e}")
+            return JSONResponse(
+                {"success": False, "error": str(e)},
+                status_code=500,
+            )
 
     @app.post("/update-settings")
     async def update_settings(
@@ -1265,6 +1337,14 @@ def _render_dashboard(
                 </svg>
                 <span>강제 탈출 (모든 코인 매도)</span>
             </button>
+            
+            <!-- 거래 내역 동기화 버튼 -->
+            <button id="sync-trades-btn" class="w-full bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 active:from-blue-700 active:to-indigo-800 text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                <span>거래 내역 동기화</span>
+            </button>
                     
                     <!-- 추가 정보 -->
                     <div class="grid grid-cols-2 gap-2 pt-4 border-t border-gray-200 dark:border-gray-700 text-xs">
@@ -1709,6 +1789,32 @@ def _render_dashboard(
                                     const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ 기술적 지표 계산 실패';
                                     addAIConsoleMessage(message, 'yellow');
                                 }} else {{
+                        // 여러 코인 스캔 결과 표시 (Ollama 1 결과)
+                        const coinAnalyses = analysis.coin_analyses || analysis.scanner_result || analysis.decision?.coin_analyses || {{}};
+                        if (coinAnalyses && Object.keys(coinAnalyses).length > 0) {{
+                            // 상위 10개 코인만 표시
+                            const sortedCoins = Object.entries(coinAnalyses)
+                                .sort((a, b) => ((b[1].score || 0) - (a[1].score || 0)))
+                                .slice(0, 10);
+                            
+                            // 각 코인 스캔 결과 표시
+                            sortedCoins.forEach(([market, data]) => {{
+                                const coinName = market.replace('KRW-', '');
+                                const score = ((data.score || 0) * 100).toFixed(1);
+                                const reason = data.reason || '분석 중';
+                                const trend = data.trend || 'unknown';
+                                const risk = data.risk || 'medium';
+                                const isSelected = market === selectedMarket;
+                                
+                                // 선택된 코인은 강조 표시
+                                const prefix = isSelected ? '⭐ ' : '  ';
+                                const trendEmoji = trend === 'uptrend' ? '📈' : trend === 'downtrend' ? '📉' : '➡️';
+                                const riskColor = risk === 'high' ? 'red' : risk === 'medium' ? 'yellow' : 'green';
+                                const message = '[' + timestamp + '] ' + prefix + coinName + ' | 점수: ' + score + '% | ' + trendEmoji + ' ' + trend + ' | 리스크: ' + risk + ' | 이유: ' + reason;
+                                addAIConsoleMessage(message, isSelected ? 'yellow' : riskColor);
+                            }});
+                        }}
+                        
                         // 신호에 따른 이모지와 색상
                         let signalEmoji = '⚪';
                         let signalColor = 'gray';
@@ -1723,19 +1829,24 @@ def _render_dashboard(
                             signalColor = 'gray';
                         }}
                         
-                                    // marketData가 있으면 상세 정보 표시, 없으면 간단히 표시
-                                    let message;
-                                    if (marketData && Object.keys(marketData).length > 0 && marketData.current_price) {{
-                                        const price = Math.floor(marketData.current_price || 0).toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
-                                        const vol = (marketData.volatility || 0).toFixed(2);
-                                        const volRatio = (marketData.volume_ratio || 0).toFixed(2);
-                                        message = '[' + timestamp + '] ' + coinName + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%) | 가격: ' + price + '원 | 변동성: ' + vol + '% | 거래량: ' + volRatio + 'x';
-                                    }} else {{
-                                        // marketData가 없어도 signal과 confidence는 표시
-                                        message = '[' + timestamp + '] ' + coinName + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%)';
-                                    }}
-                                    
-                                    addAIConsoleMessage(message, signalColor);
+                        // 선택된 코인 최종 결정 표시
+                        if (selectedMarket && signal !== 'HOLD') {{
+                            // marketData가 있으면 상세 정보 표시, 없으면 간단히 표시
+                            let message;
+                            if (marketData && Object.keys(marketData).length > 0 && marketData.current_price) {{
+                                const price = Math.floor(marketData.current_price || 0).toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                                const vol = (marketData.volatility || 0).toFixed(2);
+                                const volRatio = (marketData.volume_ratio || 0).toFixed(2);
+                                message = '[' + timestamp + '] ⭐ 최종 결정: ' + selectedMarket.replace('KRW-', '') + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%) | 가격: ' + price + '원 | 변동성: ' + vol + '% | 거래량: ' + volRatio + 'x';
+                            }} else {{
+                                // marketData가 없어도 signal과 confidence는 표시
+                                message = '[' + timestamp + '] ⭐ 최종 결정: ' + selectedMarket.replace('KRW-', '') + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%)';
+                            }}
+                            addAIConsoleMessage(message, signalColor);
+                        }} else if (signal === 'HOLD') {{
+                            const message = '[' + timestamp + '] ⚪ 최종 결정: HOLD (신뢰도: ' + confidence.toFixed(1) + '%)';
+                            addAIConsoleMessage(message, 'gray');
+                        }}
                                     
                                     // Ollama 연결 정상이면 알림 숨김
                                     const alertEl = document.getElementById('ollama-alert');
@@ -2498,6 +2609,48 @@ def _render_dashboard(
                         const existingMessages = settingsForm.querySelectorAll('.mb-4.p-3.bg-green-50, .mb-4.p-3.bg-red-50');
                         existingMessages.forEach(msg => msg.remove());
                         
+                        // 상태창 즉시 업데이트
+                        if (result.updates) {{
+                            // Current Strategy 업데이트
+                            if (result.updates.strategy) {{
+                                const strategyElements = document.querySelectorAll('.flex.justify-between.items-center');
+                                strategyElements.forEach(el => {{
+                                    if (el.querySelector('span:first-child')?.textContent === 'Current Strategy') {{
+                                        const strategyText = el.querySelector('span:last-child');
+                                        if (strategyText) {{
+                                            strategyText.textContent = result.updates.strategy;
+                                        }}
+                                    }}
+                                }});
+                            }}
+                            
+                            // Current Market 업데이트
+                            if (result.updates.market) {{
+                                const marketElements = document.querySelectorAll('.flex.justify-between.items-center');
+                                marketElements.forEach(el => {{
+                                    if (el.querySelector('span:first-child')?.textContent === 'Current Market') {{
+                                        const marketText = el.querySelector('span:last-child');
+                                        if (marketText) {{
+                                            marketText.textContent = result.updates.market;
+                                        }}
+                                    }}
+                                }});
+                            }}
+                            
+                            // Order Size 업데이트
+                            if (result.updates.order_amount_pct !== undefined) {{
+                                const orderSizeElements = document.querySelectorAll('.flex.justify-between.items-center');
+                                orderSizeElements.forEach(el => {{
+                                    if (el.querySelector('span:first-child')?.textContent.includes('💰 Order Size')) {{
+                                        const orderSizeText = el.querySelector('span:last-child');
+                                        if (orderSizeText) {{
+                                            orderSizeText.textContent = result.updates.order_amount_pct + '%';
+                                        }}
+                                    }}
+                                }});
+                            }}
+                        }}
+                        
                         // 성공 메시지 표시
                         const messageDiv = document.createElement('div');
                         messageDiv.className = 'mb-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg';
@@ -2506,11 +2659,10 @@ def _render_dashboard(
                         `;
                         settingsForm.insertBefore(messageDiv, settingsForm.firstChild);
                         
-                        // 3초 후 메시지 제거 (페이지 새로고침 없이)
+                        // 3초 후 메시지 제거
                         setTimeout(() => {{
                             messageDiv.remove();
-                            // 페이지 새로고침 없이 SSE 스트림으로 업데이트됨
-                        }}, 2000);
+                        }}, 3000);
                     }} else {{
                         // 오류 메시지 표시
                         alert('설정 업데이트 실패: ' + (result.error || '알 수 없는 오류'));
@@ -2642,6 +2794,43 @@ def _render_dashboard(
                 }} finally {{
                     forceExitBtn.disabled = false;
                     forceExitBtn.innerHTML = '<span>🚪</span><span>강제 탈출 (모든 코인 매도)</span>';
+                }}
+            }});
+        }}
+        
+        // 거래 내역 동기화 버튼 핸들러
+        const syncTradesBtn = document.getElementById('sync-trades-btn');
+        if (syncTradesBtn) {{
+            syncTradesBtn.addEventListener('click', async () => {{
+                if (!confirm('업비트에서 직접 거래한 내역을 동기화하시겠습니까?')) {{
+                    return;
+                }}
+                
+                try {{
+                    syncTradesBtn.disabled = true;
+                    const originalText = syncTradesBtn.innerHTML;
+                    syncTradesBtn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg><span>동기화 중...</span>';
+                    
+                    const response = await fetch('/api/sync-trades', {{
+                        method: 'POST',
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        alert('✅ ' + data.message);
+                        // 거래 내역 다시 로드
+                        loadTradeHistory();
+                        loadStatistics();
+                    }} else {{
+                        alert('❌ 동기화 실패:\\n' + (data.error || '알 수 없는 에러'));
+                    }}
+                }} catch (error) {{
+                    console.error('Sync trades error:', error);
+                    alert('❌ 동기화 중 오류가 발생했습니다.');
+                }} finally {{
+                    syncTradesBtn.disabled = false;
+                    syncTradesBtn.innerHTML = originalText;
                 }}
             }});
         }}
