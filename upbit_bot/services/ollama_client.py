@@ -13,7 +13,9 @@ LOGGER = logging.getLogger(__name__)
 
 # Ollama 설정
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://100.98.189.30:11434")
+# Ollama 1: 스캐너 모델 (1.5b - 정보 수집용, 빠른 스캔)
 OLLAMA_SCANNER_MODEL = os.getenv("OLLAMA_SCANNER_MODEL", "qwen2.5:1.5b")
+# Ollama 2: 결정자 모델 (7b - 분석 및 판단용, 정확한 결정)
 OLLAMA_DECISION_MODEL = os.getenv("OLLAMA_DECISION_MODEL", "qwen2.5-coder:7b")
 
 
@@ -28,26 +30,63 @@ class OllamaClient:
 
     def __init__(
         self,
-        base_url: str = OLLAMA_BASE_URL,
+        base_url: str | None = None,
         model: str | None = None,
         timeout: int = 45,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        # base_url이 None이면 기본값 사용
+        url = base_url or OLLAMA_BASE_URL
+        self.base_url = url.rstrip("/")
         self.model = model
         self.timeout = timeout
 
     def verify_connection(self) -> bool:
-        """Ollama 서버 연결 확인."""
+        """Ollama 서버 연결 및 모델 설치 확인."""
         try:
             response = requests.get(f"{self.base_url}/api/tags", timeout=5)
             if response.status_code == 200:
                 models = response.json().get("models", [])
                 model_names = [m.get("name", "") for m in models]
-                if self.model and self.model not in model_names:
-                    LOGGER.warning(f"모델 '{self.model}'이 설치되어 있지 않습니다.")
-                    LOGGER.info(f"사용 가능한 모델: {', '.join(model_names[:5])}")
+                
+                if not model_names:
+                    LOGGER.warning("Ollama 서버에 설치된 모델이 없습니다.")
                     return False
+                
+                # 모델 확인 (정확한 이름 또는 부분 매칭)
+                if self.model:
+                    model_found = (
+                        self.model in model_names
+                        or any(
+                            self.model.replace(":", "") in name.replace(":", "")
+                            for name in model_names
+                        )
+                        or any(
+                            all(part in name for part in self.model.split(":"))
+                            for name in model_names
+                        )
+                    )
+                    
+                    if not model_found:
+                        LOGGER.warning(
+                            f"모델 '{self.model}'이 설치되어 있지 않습니다.\n"
+                            f"사용 가능한 모델: {', '.join(model_names[:5])}"
+                        )
+                        LOGGER.info(
+                            f"설치 방법: python scripts/install_ollama_model.py {self.model}"
+                        )
+                        return False
+                    
+                    LOGGER.debug(f"모델 '{self.model}' 확인됨")
+                
                 return True
+            return False
+        except requests.exceptions.ConnectTimeout:
+            LOGGER.warning(f"Ollama 서버 연결 시간 초과: {self.base_url}")
+            LOGGER.info("노트북이 켜져 있고 Ollama 서버가 실행 중인지 확인하세요.")
+            return False
+        except requests.exceptions.ConnectionError:
+            LOGGER.warning(f"Ollama 서버에 연결할 수 없습니다: {self.base_url}")
+            LOGGER.info("노트북이 꺼져 있거나 Ollama 서버가 실행 중이지 않습니다.")
             return False
         except requests.exceptions.RequestException as e:
             LOGGER.error(f"Ollama 연결 실패: {e}")

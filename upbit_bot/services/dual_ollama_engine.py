@@ -8,6 +8,7 @@ from typing import Any
 from upbit_bot.strategies import Candle, StrategySignal
 
 from .coin_scanner import CoinScanner
+from .ollama_client import OLLAMA_BASE_URL
 from .trading_decision import TradingDecisionMaker
 
 LOGGER = logging.getLogger(__name__)
@@ -30,13 +31,15 @@ class DualOllamaEngine:
         Args:
             scanner_model: 스캐너 모델 (기본: qwen2.5:1.5b)
             decision_model: 결정자 모델 (기본: qwen2.5-coder:7b)
-            ollama_url: Ollama 서버 URL
+            ollama_url: Ollama 서버 URL (None이면 기본값 사용)
             confidence_threshold: 신뢰도 임계값
             high_risk: 고위험 모드 여부
         """
-        self.scanner = CoinScanner(ollama_url=ollama_url, model=scanner_model)
+        # ollama_url이 None이면 기본값 사용
+        url = ollama_url or OLLAMA_BASE_URL
+        self.scanner = CoinScanner(ollama_url=url, model=scanner_model)
         self.decision_maker = TradingDecisionMaker(
-            ollama_url=ollama_url,
+            ollama_url=url,
             model=decision_model,
             confidence_threshold=confidence_threshold,
             high_risk=high_risk,

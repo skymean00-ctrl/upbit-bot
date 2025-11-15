@@ -18,13 +18,16 @@ class TradingDecisionMaker:
 
     def __init__(
         self,
-        ollama_url: str = OLLAMA_BASE_URL,
-        model: str = OLLAMA_DECISION_MODEL,
+        ollama_url: str | None = None,
+        model: str | None = None,
         timeout: int = 45,
         confidence_threshold: float = 0.6,
         high_risk: bool = False,
     ) -> None:
-        self.client = OllamaClient(base_url=ollama_url, model=model, timeout=timeout)
+        # ollama_url과 model이 None이면 기본값 사용
+        url = ollama_url or OLLAMA_BASE_URL
+        model_name = model or OLLAMA_DECISION_MODEL
+        self.client = OllamaClient(base_url=url, model=model_name, timeout=timeout)
         self.confidence_threshold = confidence_threshold
         self.high_risk = high_risk
         self.last_decision: dict[str, Any] | None = None

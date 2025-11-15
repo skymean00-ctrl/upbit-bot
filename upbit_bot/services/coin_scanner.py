@@ -18,11 +18,14 @@ class CoinScanner:
 
     def __init__(
         self,
-        ollama_url: str = OLLAMA_BASE_URL,
-        model: str = OLLAMA_SCANNER_MODEL,
+        ollama_url: str | None = None,
+        model: str | None = None,
         timeout: int = 30,
     ) -> None:
-        self.client = OllamaClient(base_url=ollama_url, model=model, timeout=timeout)
+        # ollama_url과 model이 None이면 기본값 사용
+        url = ollama_url or OLLAMA_BASE_URL
+        model_name = model or OLLAMA_SCANNER_MODEL
+        self.client = OllamaClient(base_url=url, model=model_name, timeout=timeout)
         self.last_scan_result: dict[str, dict[str, Any]] | None = None
 
     def calculate_indicators(self, candles: list[Candle]) -> dict[str, Any]:
