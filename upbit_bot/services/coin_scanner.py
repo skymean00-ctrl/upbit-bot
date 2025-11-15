@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import statistics
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, UTC
 from typing import Any
 
 from upbit_bot.strategies import Candle
@@ -22,13 +24,18 @@ class CoinScanner:
         self,
         ollama_url: str | None = None,
         model: str | None = None,
-        timeout: int = 5,  # 타임아웃을 5초로 단축 (빠른 실패)
+        timeout: int = 90,  # 타임아웃 90초 (Ollama 서버 응답 대기 - 네트워크 지연 고려)
     ) -> None:
         # ollama_url과 model이 None이면 기본값 사용
         url = ollama_url or OLLAMA_BASE_URL
         model_name = model or OLLAMA_SCANNER_MODEL
         self.client = OllamaClient(base_url=url, model=model_name, timeout=timeout)
         self.last_scan_result: dict[str, dict[str, Any]] | None = None
+        self.last_scan_time: datetime | None = None
+        self._stop_event = threading.Event()
+        self._scan_thread: threading.Thread | None = None
+        self._scan_lock = threading.Lock()
+        self._markets_data_callback: Any = None  # markets_data를 가져오는 콜백 함수
 
     def calculate_indicators(self, candles: list[Candle]) -> dict[str, Any]:
         """기술적 지표 계산."""
@@ -110,14 +117,14 @@ class CoinScanner:
             return None
 
     def scan_markets(
-        self, markets_data: dict[str, list[Candle]], max_workers: int = 15
+        self, markets_data: dict[str, list[Candle]], max_workers: int = 5
     ) -> dict[str, dict[str, Any]]:
         """
         여러 코인을 병렬로 스캔하여 정보 수집.
 
         Args:
             markets_data: {market: [candles]} 딕셔너리
-            max_workers: 최대 동시 처리 수 (기본값: 15)
+            max_workers: 최대 동시 처리 수 (기본값: 5, Ollama 서버 부하 고려)
 
         Returns:
             {market: {score, reason, trend, risk, indicators}} 딕셔너리
@@ -165,6 +172,76 @@ class CoinScanner:
                     LOGGER.warning(f"코인 {market} 스캔 처리 중 오류: {e}")
 
         self.last_scan_result = results
+        self.last_scan_time = datetime.now(UTC)
         LOGGER.info(f"코인 스캔 완료: {len(results)}개 코인 분석됨 (성공률: {len(results)/len(markets_data)*100:.1f}%)")
         return results
+    
+    def start_background_scanning(
+        self,
+        get_markets_data_callback: Any,
+        interval_seconds: int = 300,  # 5분마다 스캔
+    ) -> None:
+        """
+        백그라운드에서 지속적으로 코인 스캔 시작 (서버 시작/종료와 별개).
+        
+        Args:
+            get_markets_data_callback: markets_data를 반환하는 함수
+            interval_seconds: 스캔 간격 (초, 기본값: 300초 = 5분)
+        """
+        if self._scan_thread and self._scan_thread.is_alive():
+            LOGGER.info("Ollama 1 백그라운드 스캔이 이미 실행 중입니다.")
+            return
+        
+        self._markets_data_callback = get_markets_data_callback
+        self._stop_event.clear()
+        
+        def background_scan_loop() -> None:
+            """백그라운드 스캔 루프"""
+            LOGGER.info(f"Ollama 1 백그라운드 스캔 시작 (간격: {interval_seconds}초)")
+            
+            while not self._stop_event.is_set():
+                try:
+                    # markets_data 가져오기
+                    if self._markets_data_callback:
+                        markets_data = self._markets_data_callback()
+                        if markets_data:
+                            with self._scan_lock:
+                                # 스캔 실행
+                                self.scan_markets(markets_data)
+                                LOGGER.info(
+                                    f"Ollama 1 백그라운드 스캔 완료: "
+                                    f"{len(self.last_scan_result or {})}개 코인 분석됨 "
+                                    f"(다음 스캔: {interval_seconds}초 후)"
+                                )
+                    else:
+                        LOGGER.warning("Ollama 1 백그라운드 스캔: markets_data 콜백이 없습니다.")
+                    
+                    # interval_seconds 동안 대기 (중간에 stop 이벤트 체크)
+                    for _ in range(interval_seconds):
+                        if self._stop_event.is_set():
+                            break
+                        time.sleep(1)
+                        
+                except Exception as e:
+                    LOGGER.error(f"Ollama 1 백그라운드 스캔 오류: {e}", exc_info=True)
+                    # 오류 발생 시에도 계속 실행
+                    time.sleep(60)
+            
+            LOGGER.info("Ollama 1 백그라운드 스캔 종료")
+        
+        self._scan_thread = threading.Thread(target=background_scan_loop, daemon=True)
+        self._scan_thread.start()
+        LOGGER.info("Ollama 1 백그라운드 스캔 스레드 시작됨")
+    
+    def stop_background_scanning(self) -> None:
+        """백그라운드 스캔 중지."""
+        if self._scan_thread and self._scan_thread.is_alive():
+            self._stop_event.set()
+            self._scan_thread.join(timeout=5)
+            LOGGER.info("Ollama 1 백그라운드 스캔 중지됨")
+    
+    def get_last_scan_result(self) -> dict[str, dict[str, Any]] | None:
+        """최신 스캔 결과 반환."""
+        with self._scan_lock:
+            return self.last_scan_result
 

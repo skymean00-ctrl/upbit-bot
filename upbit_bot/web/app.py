@@ -183,13 +183,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     candle_unit = 1 if is_ai_strategy else 5
     poll_interval = 60 if is_ai_strategy else 300
 
+    # 거래 모드 기본값을 live (dry_run=False)로 설정
+    # 환경변수 DRY_RUN이 True면 dry-run 모드, 그 외에는 live 모드
+    import os
+    default_dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+    
     engine = ExecutionEngine(
         client=client,
         strategy=strategy,
         market=settings.market,
         candle_unit=candle_unit,
         poll_interval=poll_interval,
-        dry_run=True,
+        dry_run=default_dry_run,  # 기본값: live 모드 (False)
         risk_manager=risk_manager,
         position_sizer=position_sizer,
         notifiers=_build_notifiers(settings),
@@ -277,15 +282,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return HTMLResponse(content=html)
 
     @app.post("/start")
-    async def start_trading(mode: str = Form("dry")) -> RedirectResponse:
-        controller.engine.dry_run = mode != "live"
-        controller.start()
-        return RedirectResponse(url="/", status_code=303)
+    async def start_trading(mode: str = Form("dry")) -> JSONResponse:
+        """서버 시작"""
+        try:
+            controller.engine.dry_run = mode != "live"
+            controller.start()
+            LOGGER.info(f"서버 시작됨 (mode={mode}, dry_run={controller.engine.dry_run})")
+            return JSONResponse({
+                "success": True,
+                "message": "서버가 시작되었습니다.",
+                "mode": mode,
+                "dry_run": controller.engine.dry_run,
+                "running": controller.engine.is_running(),
+            })
+        except Exception as e:
+            LOGGER.error(f"서버 시작 실패: {e}")
+            return JSONResponse({
+                "success": False,
+                "error": str(e),
+            }, status_code=500)
 
     @app.post("/stop")
-    async def stop_trading() -> RedirectResponse:
-        controller.stop()
-        return RedirectResponse(url="/", status_code=303)
+    async def stop_trading() -> JSONResponse:
+        """서버 중지"""
+        try:
+            controller.stop()
+            LOGGER.info("서버 중지됨")
+            return JSONResponse({
+                "success": True,
+                "message": "서버가 중지되었습니다.",
+                "running": controller.engine.is_running(),
+            })
+        except Exception as e:
+            LOGGER.error(f"서버 중지 실패: {e}")
+            return JSONResponse({
+                "success": False,
+                "error": str(e),
+            }, status_code=500)
 
     @app.post("/force-exit")
     async def force_exit() -> JSONResponse:
@@ -370,7 +403,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             def sync_trades_background():
                                 with sync_lock:
                                     try:
-                                        result = controller.trade_history_store.sync_external_trades(
+                                        trade_history_store: TradeHistoryStore = app.state.trade_history_store
+                                        result = trade_history_store.sync_external_trades(
                                             client=controller.engine.client,
                                             days=7,
                                         )
@@ -789,7 +823,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def sync_trades() -> JSONResponse:
         """사용자가 직접 거래한 내역을 동기화."""
         try:
-            result = controller.trade_history_store.sync_external_trades(
+            trade_history_store: TradeHistoryStore = app.state.trade_history_store
+            result = trade_history_store.sync_external_trades(
                 client=controller.engine.client,
                 days=7,
             )
@@ -828,10 +863,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # 거래 모드 업데이트 (dry-run/live)
             if mode is not None:
                 if mode in ("dry", "live"):
-                    controller.engine.dry_run = mode != "live"
+                    new_dry_run = mode != "live"
+                    controller.engine.dry_run = new_dry_run
                     updates["mode"] = mode
-                    updates["dry_run"] = controller.engine.dry_run
-                    LOGGER.info(f"Trading mode updated to: {mode} (dry_run={controller.engine.dry_run})")
+                    updates["dry_run"] = new_dry_run  # 명시적으로 값 저장
+                    LOGGER.info(f"Trading mode updated to: {mode} (dry_run={new_dry_run})")
             
             if strategy and strategy in AVAILABLE_STRATEGIES:
                 # 전략 업데이트
@@ -1301,7 +1337,7 @@ def _render_dashboard(
                 <div class="space-y-4">
                     <form method="post" action="/start" class="space-y-3">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">📊 거래 모드 선택</label>
+                            <label for="mode" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">📊 거래 모드 선택</label>
                             <div class="grid grid-cols-2 gap-2">
                                 <button type="button" id="mode-dry" class="w-full px-4 py-2 border-2 rounded-lg font-semibold transition-all {'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' if state.dry_run else 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:border-blue-400'}">
                                     🟢 Dry-run
@@ -1450,10 +1486,10 @@ def _render_dashboard(
                         </div>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <label for="market-display" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             Market
                         </label>
-                        <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+                        <div id="market-display" class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
                             <p class="text-sm font-semibold text-gray-900 dark:text-white">
                                 {state.market or 'KRW-BTC'}
                             </p>
@@ -1527,6 +1563,13 @@ def _render_dashboard(
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script>
         const STRATEGY_INFO = {json.dumps({k: v for k, v in strategy_info.items()}, ensure_ascii=False)};
+        // manual 전략 설명 추가 (사용자가 업비트에서 직접 거래한 내역)
+        STRATEGY_INFO['manual'] = {{
+            name: '수동 거래',
+            description: '사용자가 업비트에서 직접 거래한 내역 (동기화된 거래)',
+            risk: '사용자 결정',
+            best_for: '수동 거래'
+        }};
         let currentChartInstance = null;
         let eventSource = null;
         
@@ -1575,22 +1618,34 @@ def _render_dashboard(
                     if (isAIStrategy) {{
                         statusBadge.style.display = 'flex';
                         
-                        if (data.ollama_status) {{
-                            const connected = data.ollama_status.connected || false;
+                        // Ollama 상태 명시적 확인 (null/undefined 체크)
+                        if (data.ollama_status && typeof data.ollama_status === 'object') {{
+                            const connected = data.ollama_status.connected === true;
                             const error = data.ollama_status.error || null;
-                            const model = data.ollama_status.model || 'N/A';
-                            const modelAvailable = data.ollama_status.model_available || false;
+                            const scannerModel = data.ollama_status.scanner_model || 'N/A';
+                            const decisionModel = data.ollama_status.decision_model || 'N/A';
+                            const scannerAvailable = data.ollama_status.scanner_model_available === true;
+                            const decisionAvailable = data.ollama_status.decision_model_available === true;
+                            const modelAvailable = data.ollama_status.model_available === true;
                             
                             if (connected && modelAvailable) {{
-                                // 연결됨 + 모델 사용 가능
+                                // 연결됨 + 두 모델 모두 사용 가능
                                 statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-900/30 text-green-400 border border-green-600/50';
                                 statusIcon.className = 'w-2 h-2 rounded-full bg-green-400 animate-pulse';
-                                statusText.textContent = '✅ Ollama 연결됨 (' + model + ')';
-                            }} else if (connected && !modelAvailable) {{
+                                statusText.textContent = '✅ Ollama 연결됨 (1.5b + 7b)';
+                            }} else if (connected && (scannerAvailable || decisionAvailable)) {{
+                                // 연결됨 + 일부 모델만 사용 가능
+                                const missingModels = [];
+                                if (!scannerAvailable) missingModels.push('1.5b');
+                                if (!decisionAvailable) missingModels.push('7b');
+                                statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-900/30 text-yellow-400 border border-yellow-600/50';
+                                statusIcon.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
+                                statusText.textContent = '⚠️ Ollama 연결됨 (모델 ' + missingModels.join(', ') + ' 없음)';
+                            }} else if (connected && !scannerAvailable && !decisionAvailable) {{
                                 // 연결됨 + 모델 없음
                                 statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-900/30 text-yellow-400 border border-yellow-600/50';
                                 statusIcon.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
-                                statusText.textContent = '⚠️ Ollama 연결됨 (모델 ' + model + ' 없음)';
+                                statusText.textContent = '⚠️ Ollama 연결됨 (모델 없음: ' + scannerModel + ', ' + decisionModel + ')';
                             }} else {{
                                 // 연결 안됨
                                 statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-900/30 text-red-400 border border-red-600/50';
@@ -1599,7 +1654,7 @@ def _render_dashboard(
                                 statusText.textContent = '❌ Ollama 연결 실패' + errorMsg;
                             }}
                         }} else {{
-                            // Ollama 상태 정보가 없으면 확인 중 상태 유지
+                            // Ollama 상태 정보가 없거나 잘못된 형식이면 확인 중 상태 유지
                             statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-700/50 text-gray-400 border border-gray-600';
                             statusIcon.className = 'w-2 h-2 rounded-full bg-gray-500 animate-pulse';
                             statusText.textContent = 'Ollama 확인 중...';
@@ -1648,12 +1703,39 @@ def _render_dashboard(
                     // 거래 내역 실시간 업데이트
                     if (data.recent_trades && Array.isArray(data.recent_trades)) {{
                         updateTradeHistory(data.recent_trades);
-                }}
+                    }}
                 
-                // 상태 업데이트 (마지막 실행, 마지막 신호)
+                // 서버 상태 업데이트 (페이지 상단 + 서버 제어 창 동기화)
                 if (data.state) {{
+                    // running 값 명시적 확인 (undefined/null 처리)
+                    const isRunning = data.state.running === true;
+                    
+                    // 페이지 상단 서버 상태 업데이트
+                    const statusDot = document.getElementById('server-status-dot');
+                    const statusText = document.getElementById('server-status-text');
+                    if (statusDot && statusText) {{
+                        if (isRunning) {{
+                            statusDot.classList.add('bg-green-500', 'animate-pulse');
+                            statusDot.classList.remove('bg-red-500');
+                            statusText.textContent = '🟢 Running';
+                            statusText.classList.add('text-green-600', 'dark:text-green-400');
+                            statusText.classList.remove('text-red-600', 'dark:text-red-400');
+                        }} else {{
+                            statusDot.classList.remove('bg-green-500', 'animate-pulse');
+                            statusDot.classList.add('bg-red-500');
+                            statusText.textContent = '🔴 Stopped';
+                            statusText.classList.remove('text-green-600', 'dark:text-green-400');
+                            statusText.classList.add('text-red-600', 'dark:text-red-400');
+                        }}
+                    }}
+                    
+                    // 거래 모드 업데이트 (서버 제어 창 + 페이지 상단) - 명시적 값 확인
+                    // data.state.dry_run 값 명시적 확인 (false도 명시적으로 처리)
+                    const isDryRun = data.state.dry_run === true || (data.state.dry_run !== false && data.state.dry_run !== undefined && data.state.dry_run !== null);
+                    updateTradingModeBadge(isDryRun);
+                    
+                    // 마지막 실행 시간 업데이트
                     const lastRunEl = document.getElementById('last-run-time');
-                    const lastSignalEl = document.getElementById('last-signal-badge');
                     if (lastRunEl) {{
                         const lastRun = data.state.last_run;
                         if (lastRun) {{
@@ -1668,13 +1750,16 @@ def _render_dashboard(
                                 }} else {{
                                     lastRunEl.textContent = runTime.toLocaleTimeString('ko-KR', {{hour: '2-digit', minute: '2-digit'}});
                                 }}
-                            }} catch {{
+                            }} catch (e) {{
                                 lastRunEl.textContent = lastRun;
                             }}
                         }} else {{
                             lastRunEl.textContent = '-';
                         }}
                     }}
+                    
+                    // 마지막 신호 업데이트
+                    const lastSignalEl = document.getElementById('last-signal-badge');
                     if (lastSignalEl) {{
                         const signal = data.state.last_signal ?? 'HOLD';
                         lastSignalEl.textContent = signal;
@@ -1779,17 +1864,16 @@ def _render_dashboard(
                                     const lastRun = (data.state && data.state.last_run) ? data.state.last_run : '아직 없음';
                                     const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ 서버 중지됨 (마지막 실행: ' + lastRun + ')';
                                     addAIConsoleMessage(message, 'gray');
-                                }} else if (status === 'no_analysis') {{
-                                    const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ AI 분석 결과 없음 (Ollama 연결 확인 필요)';
-                                    addAIConsoleMessage(message, 'yellow');
                                 }} else if (status === 'insufficient_data') {{
                                     const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ 데이터 부족 (최소 5개 캔들 필요)';
                                     addAIConsoleMessage(message, 'yellow');
                                 }} else if (status === 'calculation_failed') {{
                                     const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ 기술적 지표 계산 실패';
                                     addAIConsoleMessage(message, 'yellow');
-                                }} else {{
+                                }}
+                        
                         // 여러 코인 스캔 결과 표시 (Ollama 1 결과)
+                        // status === 'no_analysis'일 때도 coinAnalyses가 있으면 표시
                         const coinAnalyses = analysis.coin_analyses || analysis.scanner_result || analysis.decision?.coin_analyses || {{}};
                         if (coinAnalyses && Object.keys(coinAnalyses).length > 0) {{
                             // 상위 10개 코인만 표시
@@ -1813,7 +1897,20 @@ def _render_dashboard(
                                 const message = '[' + timestamp + '] ' + prefix + coinName + ' | 점수: ' + score + '% | ' + trendEmoji + ' ' + trend + ' | 리스크: ' + risk + ' | 이유: ' + reason;
                                 addAIConsoleMessage(message, isSelected ? 'yellow' : riskColor);
                             }});
+                            
+                            // status === 'no_analysis'이고 선택된 코인이 coinAnalyses에 없는 경우에만 경고 표시
+                            if (status === 'no_analysis' && selectedMarket && !coinAnalyses[selectedMarket]) {{
+                                const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ AI 분석 결과 없음 (Ollama 연결 확인 필요)';
+                                addAIConsoleMessage(message, 'yellow');
+                            }}
+                        }} else if (status === 'no_analysis') {{
+                            // coinAnalyses가 완전히 없고 status가 no_analysis인 경우
+                            const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ AI 분석 결과 없음 (Ollama 연결 확인 필요)';
+                            addAIConsoleMessage(message, 'yellow');
                         }}
+                        
+                        // status가 no_analysis가 아니거나 coinAnalyses가 있는 경우에만 최종 결정 표시
+                        if (status !== 'no_analysis' || (coinAnalyses && Object.keys(coinAnalyses).length > 0)) {{
                         
                         // 신호에 따른 이모지와 색상
                         let signalEmoji = '⚪';
@@ -1846,6 +1943,7 @@ def _render_dashboard(
                         }} else if (signal === 'HOLD') {{
                             const message = '[' + timestamp + '] ⚪ 최종 결정: HOLD (신뢰도: ' + confidence.toFixed(1) + '%)';
                             addAIConsoleMessage(message, 'gray');
+                        }}
                         }}
                                     
                                     // Ollama 연결 정상이면 알림 숨김
@@ -1888,10 +1986,12 @@ def _render_dashboard(
                         }}
                     }}
                 }}
-            }} catch (err) {{
+            catch (err) {{
                 console.error('Stream update error:', err);
             }}
         }}
+        
+        // SSE 스트림 연결 중복 호출 제거 (이미 2221줄에서 호출됨)
         
         // 자산 현황 테이블 업데이트 함수
         async function updateAccountsTable(accounts) {{
@@ -2494,7 +2594,15 @@ def _render_dashboard(
                 const totalPnlEl = document.getElementById('stat-' + prefix + '-total-pnl');
                 if (totalPnlEl) {{
                     const totalPnl = stats.total_pnl || 0;
-                    const pnlText = totalPnl.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                    // 소숫점이 있으면 . 표시, 없으면 정수로 표시
+                    let pnlText;
+                    if (totalPnl % 1 === 0) {{
+                        // 정수인 경우
+                        pnlText = totalPnl.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                    }} else {{
+                        // 소숫점이 있는 경우
+                        pnlText = totalPnl.toLocaleString('ko-KR', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+                    }}
                     totalPnlEl.textContent = pnlText + ' KRW';
                     // 마이너스 손실인 경우 빨간색, 플러스 수익인 경우 초록색
                     if (totalPnl < 0) {{
@@ -2566,26 +2674,94 @@ def _render_dashboard(
             }}
         }}
 
-        // 거래 모드 버튼 처리 (드롭다운 대신 버튼)
+        // 거래 모드 배지 업데이트 함수 (전역에서 사용)
+        function updateTradingModeBadge(isDryRun) {{
+            // 서버 제어 창의 거래 모드 배지 업데이트
+            const modeBadge = document.getElementById('trading-mode-badge');
+            if (modeBadge) {{
+                if (isDryRun) {{
+                    modeBadge.textContent = '🟢 Dry-run (시뮬레이션)';
+                    modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-blue-500 to-blue-600 text-white';
+                }} else {{
+                    modeBadge.textContent = '🔴 Live (실제 거래)';
+                    modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-orange-500 to-red-600 text-white';
+                }}
+            }}
+            
+            // 페이지 상단의 거래 모드 배지 업데이트
+            const topModeBadges = document.querySelectorAll('.px-5.py-2.5.rounded-xl.shadow-lg.font-bold.text-sm');
+            topModeBadges.forEach(badge => {{
+                if (isDryRun) {{
+                    badge.textContent = 'DRY-RUN';
+                    badge.className = 'px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm bg-gradient-to-r from-blue-500 to-blue-600 text-white dark:from-blue-600 dark:to-blue-700';
+                }} else {{
+                    badge.textContent = 'LIVE';
+                    badge.className = 'px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm bg-gradient-to-r from-orange-500 to-red-600 text-white dark:from-orange-600 dark:to-red-700';
+                }}
+            }});
+        }}
+        
+        // 거래 모드 버튼 처리 (즉시 적용)
         const modeDryBtn = document.getElementById('mode-dry');
         const modeLiveBtn = document.getElementById('mode-live');
         const modeInput = document.getElementById('mode');
         
-        if (modeDryBtn && modeLiveBtn && modeInput) {{
-            modeDryBtn.addEventListener('click', () => {{
+        async function updateTradingMode(mode) {{
+            // UI 업데이트
+            if (mode === 'dry') {{
                 modeInput.value = 'dry';
                 modeDryBtn.classList.remove('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-700', 'text-gray-700', 'dark:text-gray-300');
                 modeDryBtn.classList.add('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/30', 'text-blue-700', 'dark:text-blue-300');
                 modeLiveBtn.classList.remove('border-red-500', 'bg-red-50', 'dark:bg-red-900/30', 'text-red-700', 'dark:text-red-300');
                 modeLiveBtn.classList.add('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-700', 'text-gray-700', 'dark:text-gray-300');
-            }});
-            
-            modeLiveBtn.addEventListener('click', () => {{
+            }} else {{
                 modeInput.value = 'live';
                 modeLiveBtn.classList.remove('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-700', 'text-gray-700', 'dark:text-gray-300');
                 modeLiveBtn.classList.add('border-red-500', 'bg-red-50', 'dark:bg-red-900/30', 'text-red-700', 'dark:text-red-300');
                 modeDryBtn.classList.remove('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/30', 'text-blue-700', 'dark:text-blue-300');
                 modeDryBtn.classList.add('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-700', 'text-gray-700', 'dark:text-gray-300');
+            }}
+            
+            // 서버에 즉시 반영
+            try {{
+                const formData = new FormData();
+                formData.append('mode', mode);
+                
+                const response = await fetch('/update-settings', {{
+                    method: 'POST',
+                    body: formData,
+                }});
+                
+                const result = await response.json();
+                
+                if (result.success) {{
+                    console.log('거래 모드 변경 완료:', mode, 'updates:', result.updates);
+                    // 거래 모드 배지 업데이트 (명시적으로 값 확인)
+                    // mode 값으로도 판단 (dry_run이 없어도 mode로 판단)
+                    const isDryRun = result.updates?.dry_run === true || 
+                                     (result.updates?.dry_run === undefined && mode === 'dry') ||
+                                     (result.updates?.mode === 'dry');
+                    console.log('거래 모드 배지 업데이트:', isDryRun ? 'Dry-run' : 'Live', '(dry_run:', result.updates?.dry_run, ', mode:', mode, ')');
+                    updateTradingModeBadge(isDryRun);
+                }} else {{
+                    console.error('거래 모드 변경 실패:', result.error);
+                    alert('거래 모드 변경 실패: ' + (result.error || '알 수 없는 오류'));
+                }}
+            }} catch (error) {{
+                console.error('거래 모드 변경 오류:', error);
+                alert('거래 모드 변경 중 오류가 발생했습니다.');
+            }}
+        }}
+        
+        if (modeDryBtn && modeLiveBtn && modeInput) {{
+            modeDryBtn.addEventListener('click', () => {{
+                updateTradingMode('dry');
+            }});
+            
+            modeLiveBtn.addEventListener('click', () => {{
+                if (confirm('⚠️ 실제 거래 모드(LIVE)로 전환하시겠습니까?\\n실제 돈이 거래됩니다!')) {{
+                    updateTradingMode('live');
+                }}
             }});
         }}
 
@@ -2649,6 +2825,12 @@ def _render_dashboard(
                                     }}
                                 }});
                             }}
+                            
+                            // 거래 모드 업데이트 - 명시적 값 확인
+                            if (result.updates.dry_run !== undefined || result.updates.mode) {{
+                                const isDryRun = result.updates.dry_run === true || (result.updates.dry_run !== false && result.updates.dry_run !== undefined && result.updates.mode === 'dry');
+                                updateTradingModeBadge(isDryRun);
+                            }}
                         }}
                         
                         // 성공 메시지 표시
@@ -2678,6 +2860,8 @@ def _render_dashboard(
         loadTradeHistory();
         loadStatistics();
         
+        // SSE 스트림은 위에서 이미 연결됨
+        
         // 자동 새로고침 제거됨 (SSE 스트림으로 실시간 업데이트)
 
         // 실시간 업데이트 (5초마다)
@@ -2685,15 +2869,18 @@ def _render_dashboard(
             fetch('/status')
                 .then(response => response.json())
                 .then(data => {{
-                    // 서버 상태 업데이트
+                    // /status 엔드포인트는 TradingState.as_dict()를 반환하므로
+                    // data.running, data.dry_run 형태로 직접 접근 가능
                     const statusDot = document.getElementById('server-status-dot');
                     const statusText = document.getElementById('server-status-text');
                     const modeBadge = document.getElementById('trading-mode-badge');
                     const lastRunTime = document.getElementById('last-run-time');
                     const lastSignalBadge = document.getElementById('last-signal-badge');
                     
+                    // 서버 상태 업데이트 (명시적 값 확인)
                     if (statusDot && statusText) {{
-                        if (data.running) {{
+                        const isRunning = data.running === true;
+                        if (isRunning) {{
                             statusDot.classList.add('bg-green-500', 'animate-pulse');
                             statusDot.classList.remove('bg-red-500');
                             statusText.textContent = '🟢 Running';
@@ -2708,17 +2895,31 @@ def _render_dashboard(
                         }}
                     }}
                     
-                    // 거래 모드 업데이트
+                    // 거래 모드 업데이트 (서버 제어 창 + 페이지 상단) - 명시적 값 확인
                     if (modeBadge) {{
-                        if (data.dry_run) {{
+                        const isDryRun = data.dry_run === true;
+                        if (isDryRun) {{
                             modeBadge.textContent = '🟢 Dry-run (시뮬레이션)';
-                            modeBadge.classList.add('bg-blue-100', 'dark:bg-blue-900/30', 'text-blue-800', 'dark:text-blue-300');
-                            modeBadge.classList.remove('bg-red-100', 'dark:bg-red-900/30', 'text-red-800', 'dark:text-red-300');
+                            modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-blue-500 to-blue-600 text-white';
                         }} else {{
                             modeBadge.textContent = '🔴 Live (실제 거래)';
-                            modeBadge.classList.remove('bg-blue-100', 'dark:bg-blue-900/30', 'text-blue-800', 'dark:text-blue-300');
-                            modeBadge.classList.add('bg-red-100', 'dark:bg-red-900/30', 'text-red-800', 'dark:text-red-300');
+                            modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-orange-500 to-red-600 text-white';
                         }}
+                    }}
+                    
+                    // 페이지 상단 거래 모드 업데이트 - 명시적 값 확인
+                    const topModeBadges = document.querySelectorAll('.px-5.py-2.5.rounded-xl.shadow-lg.font-bold.text-sm');
+                    if (topModeBadges.length > 0) {{
+                        const isDryRun = data.dry_run === true;
+                        topModeBadges.forEach(badge => {{
+                            if (isDryRun) {{
+                                badge.textContent = 'DRY-RUN';
+                                badge.className = 'px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm bg-gradient-to-r from-blue-500 to-blue-600 text-white dark:from-blue-600 dark:to-blue-700';
+                            }} else {{
+                                badge.textContent = 'LIVE';
+                                badge.className = 'px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm bg-gradient-to-r from-orange-500 to-red-600 text-white dark:from-orange-600 dark:to-red-700';
+                            }}
+                        }});
                     }}
                     
                     // 마지막 실행 시간 업데이트
@@ -2752,6 +2953,89 @@ def _render_dashboard(
                 }})
                 .catch(err => console.error('Failed to fetch status:', err));
         }}, 3000);  // 3초마다 상태 업데이트
+        
+        // 서버 시작 버튼 핸들러
+        const startForm = document.querySelector('form[action="/start"]');
+        if (startForm) {{
+            startForm.addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                
+                const modeInput = document.getElementById('mode');
+                const mode = modeInput ? modeInput.value : 'dry';
+                
+                try {{
+                    const submitBtn = startForm.querySelector('button[type="submit"]');
+                    if (submitBtn) {{
+                        submitBtn.disabled = true;
+                        submitBtn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span>시작 중...</span>';
+                    }}
+                    
+                    const formData = new FormData();
+                    formData.append('mode', mode);
+                    
+                    const response = await fetch('/start', {{
+                        method: 'POST',
+                        body: formData,
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        console.log('✅ 서버 시작됨:', data);
+                        // SSE 스트림이 자동으로 상태 업데이트를 전달할 것입니다
+                    }} else {{
+                        alert('❌ 서버 시작 실패:\\n' + (data.error || '알 수 없는 에러'));
+                    }}
+                }} catch (error) {{
+                    console.error('서버 시작 에러:', error);
+                    alert('❌ 서버 시작 중 오류가 발생했습니다.');
+                }} finally {{
+                    const submitBtn = startForm.querySelector('button[type="submit"]');
+                    if (submitBtn) {{
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg><span>서버 시작</span>';
+                    }}
+                }}
+            }});
+        }}
+        
+        // 서버 중지 버튼 핸들러
+        const stopForm = document.querySelector('form[action="/stop"]');
+        if (stopForm) {{
+            stopForm.addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                
+                try {{
+                    const submitBtn = stopForm.querySelector('button[type="submit"]');
+                    if (submitBtn) {{
+                        submitBtn.disabled = true;
+                        submitBtn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span>중지 중...</span>';
+                    }}
+                    
+                    const response = await fetch('/stop', {{
+                        method: 'POST',
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        console.log('✅ 서버 중지됨:', data);
+                        // SSE 스트림이 자동으로 상태 업데이트를 전달할 것입니다
+                    }} else {{
+                        alert('❌ 서버 중지 실패:\\n' + (data.error || '알 수 없는 에러'));
+                    }}
+                }} catch (error) {{
+                    console.error('서버 중지 에러:', error);
+                    alert('❌ 서버 중지 중 오류가 발생했습니다.');
+                }} finally {{
+                    const submitBtn = stopForm.querySelector('button[type="submit"]');
+                    if (submitBtn) {{
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"></path></svg><span>서버 중지</span>';
+                    }}
+                }}
+            }});
+        }}
         
         // 강제 탈출 버튼 핸들러
         const forceExitBtn = document.getElementById('force-exit-btn');

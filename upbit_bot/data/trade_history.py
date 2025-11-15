@@ -241,27 +241,30 @@ class TradeHistoryStore:
         Args:
             market: 특정 마켓 필터링 (None이면 모든 마켓)
             today_only: True면 오늘만, False면 누적 통계
+        
+        Note:
+            manual 전략(사용자 직접 거래)은 통계에서 제외됩니다.
         """
-        where_clause = "WHERE market = ?" if market else ""
-        params = list((market,) if market else ())
+        where_clause = "WHERE strategy != 'manual'"
+        params = []
+        if market:
+            where_clause += " AND market = ?"
+            params.append(market)
         
         # 오늘만 필터링
         today_filter = "DATE(timestamp) = DATE('now', 'localtime')"
         if today_only:
-            if where_clause:
-                where_clause += f" AND {today_filter}"
-            else:
-                where_clause = f"WHERE {today_filter}"
+            where_clause += f" AND {today_filter}"
 
-        # Total trades
+        # Total trades (manual 제외)
         cursor = self._conn.execute(
             f"SELECT COUNT(*) as count FROM trades {where_clause}",
             tuple(params),
         )
         total_trades = cursor.fetchone()["count"]
 
-        # Closed positions 필터링
-        pos_where = "WHERE status = 'closed'"
+        # Closed positions 필터링 (manual 제외)
+        pos_where = "WHERE status = 'closed' AND strategy != 'manual'"
         pos_params = []
         if market:
             pos_where += " AND market = ?"

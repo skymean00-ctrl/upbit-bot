@@ -67,9 +67,28 @@ class DualOllamaEngine:
         LOGGER.info("이중 Ollama 분석 시작")
         LOGGER.info("=" * 60)
 
-        # Step 1: Ollama 1 - 코인 스캔
+        # Step 1: Ollama 1 - 코인 스캔 (최신 스캔 결과 재사용 또는 새로 스캔)
         LOGGER.info("Step 1: 코인 스캔 (Ollama 1 - 정보 수집)")
-        coin_analyses = self.scanner.scan_markets(markets_data)
+        
+        # 최신 스캔 결과 확인 (60초 이내면 재사용)
+        from datetime import datetime, UTC
+        last_scan_time = self.scanner.last_scan_time
+        if last_scan_time:
+            time_diff = (datetime.now(UTC) - last_scan_time).total_seconds()
+            if time_diff < 60:  # 60초 이내면 재사용
+                coin_analyses = self.scanner.get_last_scan_result()
+                if coin_analyses:
+                    LOGGER.info(f"최신 스캔 결과 재사용 ({time_diff:.1f}초 전 스캔)")
+                else:
+                    # 스캔 결과가 없으면 새로 스캔
+                    coin_analyses = self.scanner.scan_markets(markets_data)
+            else:
+                # 60초 이상 지났으면 새로 스캔
+                LOGGER.info(f"스캔 결과가 오래됨 ({time_diff:.1f}초), 새로 스캔")
+                coin_analyses = self.scanner.scan_markets(markets_data)
+        else:
+            # 스캔 결과가 없으면 새로 스캔
+            coin_analyses = self.scanner.scan_markets(markets_data)
 
         if not coin_analyses:
             LOGGER.warning("코인 스캔 결과가 없어 HOLD 결정")

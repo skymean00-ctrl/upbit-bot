@@ -32,7 +32,7 @@ class OllamaClient:
         self,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: int = 45,
+        timeout: int = 90,
     ) -> None:
         # base_url이 None이면 기본값 사용
         url = base_url or OLLAMA_BASE_URL

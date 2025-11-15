@@ -68,22 +68,32 @@ class TradingController:
         return getattr(self.engine, 'last_ai_analysis', None)
     
     def get_ollama_status(self) -> dict[str, Any]:
-        """Ollama 연결 상태 확인."""
+        """Ollama 연결 상태 확인 (스캐너 모델과 결정자 모델 모두 확인)."""
         import os
         import requests
+        import logging
+        
+        LOGGER = logging.getLogger(__name__)
         
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://100.98.189.30:11434")
-        ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+        # 두 개의 모델 확인: 스캐너(1.5b)와 결정자(7b)
+        scanner_model = os.getenv("OLLAMA_SCANNER_MODEL", "qwen2.5:1.5b")
+        decision_model = os.getenv("OLLAMA_DECISION_MODEL", "qwen2.5-coder:7b")
         
         status = {
             "connected": False,
             "url": ollama_base_url,
-            "model": ollama_model,
+            "scanner_model": scanner_model,
+            "decision_model": decision_model,
+            "scanner_model_available": False,
+            "decision_model_available": False,
+            "model_available": False,  # 두 모델 모두 사용 가능한지
             "available_models": [],
             "error": None,
         }
         
         try:
+            LOGGER.debug(f"Ollama 연결 확인 시작: {ollama_base_url}")
             # 연결 확인 (5초 타임아웃)
             response = requests.get(
                 f"{ollama_base_url}/api/tags",
@@ -97,20 +107,62 @@ class TradingController:
                 
                 status["connected"] = True
                 status["available_models"] = model_names
-                status["model_available"] = any(
-                    ollama_model in name or name in ollama_model
-                    for name in model_names
-                )
+                
+                # 스캐너 모델 확인 (부분 매칭 포함)
+                scanner_found = False
+                for name in model_names:
+                    # 정확한 이름 또는 부분 매칭
+                    if (scanner_model in name or 
+                        name in scanner_model or
+                        scanner_model.replace(":", "") in name.replace(":", "") or
+                        all(part in name for part in scanner_model.split(":") if part)):
+                        scanner_found = True
+                        status["scanner_model_available"] = True
+                        status["model"] = name  # 실제 설치된 모델 이름
+                        break
+                
+                # 결정자 모델 확인 (부분 매칭 포함)
+                decision_found = False
+                for name in model_names:
+                    if (decision_model in name or 
+                        name in decision_model or
+                        decision_model.replace(":", "") in name.replace(":", "") or
+                        all(part in name for part in decision_model.split(":") if part)):
+                        decision_found = True
+                        status["decision_model_available"] = True
+                        if "model" not in status:
+                            status["model"] = name
+                        break
+                
+                # 두 모델 모두 사용 가능한지 확인
+                status["model_available"] = scanner_found and decision_found
+                
+                if not scanner_found:
+                    LOGGER.warning(f"스캐너 모델 '{scanner_model}'을 찾을 수 없습니다. 사용 가능한 모델: {', '.join(model_names[:5])}")
+                if not decision_found:
+                    LOGGER.warning(f"결정자 모델 '{decision_model}'을 찾을 수 없습니다. 사용 가능한 모델: {', '.join(model_names[:5])}")
+                    
             else:
-                status["error"] = f"HTTP {response.status_code}: {response.text[:100]}"
+                error_msg = f"HTTP {response.status_code}: {response.text[:100]}"
+                status["error"] = error_msg
+                LOGGER.error(f"Ollama API 오류: {error_msg}")
                 
         except requests.exceptions.Timeout:
-            status["error"] = "연결 시간 초과 (5초)"
+            error_msg = "연결 시간 초과 (5초)"
+            status["error"] = error_msg
+            LOGGER.warning(f"Ollama 서버 연결 시간 초과: {ollama_base_url}")
+            LOGGER.info("노트북이 켜져 있고 'ollama serve'가 실행 중인지 확인하세요.")
         except requests.exceptions.ConnectionError as e:
-            status["error"] = f"연결 실패: {str(e)[:100]}"
+            error_msg = f"연결 실패: {str(e)[:100]}"
+            status["error"] = error_msg
+            LOGGER.warning(f"Ollama 서버에 연결할 수 없습니다: {ollama_base_url}")
+            LOGGER.info("노트북이 꺼져 있거나 Ollama 서버가 실행 중이지 않습니다.")
         except Exception as e:
-            status["error"] = f"오류: {str(e)[:100]}"
+            error_msg = f"오류: {str(e)[:100]}"
+            status["error"] = error_msg
+            LOGGER.error(f"Ollama 상태 확인 중 예기치 않은 오류: {e}", exc_info=True)
         
+        LOGGER.debug(f"Ollama 상태 확인 완료: connected={status['connected']}, scanner={status['scanner_model_available']}, decision={status['decision_model_available']}")
         return status
 
     def get_account_overview(self) -> dict[str, Any]:

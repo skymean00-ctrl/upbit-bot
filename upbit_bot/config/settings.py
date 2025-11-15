@@ -74,7 +74,13 @@ def load_settings(env_path: str | Path | None = None) -> Settings:
         Settings instance loaded from environment variables.
     """
     if env_path:
-        load_dotenv(dotenv_path=env_path)
+        load_dotenv(dotenv_path=env_path, override=True)
     else:
-        load_dotenv()  # .env 파일 로드
+        # 프로젝트 루트의 .env 파일 명시적으로 로드
+        project_root = Path(__file__).parent.parent.parent
+        env_file = project_root / ".env"
+        if env_file.exists():
+            load_dotenv(dotenv_path=env_file, override=True)
+        else:
+            load_dotenv(override=True)  # 기본 .env 파일 로드
     return Settings()

@@ -757,6 +757,55 @@ class ExecutionEngine:
                 "min_order_amount": self.min_order_amount,
             }
             
+            # markets_data 콜백 함수 생성 (백그라운드 스캔용)
+            def get_markets_data() -> dict[str, list[Candle]]:
+                """markets_data를 반환하는 콜백 함수"""
+                try:
+                    # 거래량 상위 100개 코인 가져오기
+                    top_markets = self.client.get_top_volume_markets(limit=100)
+                    markets_data_result: dict[str, list[Candle]] = {}
+                    
+                    for market in top_markets[:100]:  # 최대 100개만
+                        try:
+                            raw = self.client.get_candles(market, unit=self.candle_unit, count=min(self.candle_count, 20))
+                            if not raw:
+                                continue
+                            
+                            candles_list = [
+                                Candle(
+                                    timestamp=int(item["timestamp"]),
+                                    open=float(item["opening_price"]),
+                                    high=float(item["high_price"]),
+                                    low=float(item["low_price"]),
+                                    close=float(item["trade_price"]),
+                                    volume=float(item["candle_acc_trade_volume"]),
+                                )
+                                for item in reversed(raw)
+                            ]
+                            
+                            if len(candles_list) >= 5:
+                                markets_data_result[market] = candles_list
+                        except Exception as e:
+                            LOGGER.debug(f"백그라운드 스캔: {market} 캔들 데이터 수집 실패: {e}")
+                            continue
+                    
+                    return markets_data_result
+                except Exception as e:
+                    LOGGER.warning(f"백그라운드 스캔 markets_data 콜백 오류: {e}")
+                    return {}
+            
+            # Ollama 1 백그라운드 스캔 시작 (최초 1회만)
+            if not hasattr(dual_engine.scanner, '_background_started'):
+                try:
+                    dual_engine.scanner.start_background_scanning(
+                        get_markets_data_callback=get_markets_data,
+                        interval_seconds=300,  # 5분마다 스캔
+                    )
+                    dual_engine.scanner._background_started = True
+                    LOGGER.info("Ollama 1 백그라운드 스캔 시작됨 (서버 시작/종료와 별개)")
+                except Exception as e:
+                    LOGGER.warning(f"Ollama 1 백그라운드 스캔 시작 실패: {e}")
+            
             # 이중 Ollama 엔진으로 분석
             signal, selected_market, confidence, analysis_data = dual_engine.analyze_markets(
                 markets_data=markets_data,
@@ -1049,10 +1098,10 @@ class ExecutionEngine:
                 if actual_balance <= 0:
                     try:
                         position_id = pos.get("id")
+                        entry_amount = float(pos.get("entry_amount", 0))
                         LOGGER.info(f"Cleaning up position {position_id} for {market}: no actual balance (entry_volume: {entry_volume}, entry_amount: {entry_amount:.0f}원)")
                         # 포지션을 강제로 종료 (실제로 손실 처리 - 매수 금액만큼 손실)
                         # exit_amount는 0이지만 entry_amount만큼 손실로 기록
-                        entry_amount = float(pos.get("entry_amount", 0))
                         self.trade_history_store.close_position(
                             position_id=position_id,
                             exit_price=entry_price,  # 매수가 기준

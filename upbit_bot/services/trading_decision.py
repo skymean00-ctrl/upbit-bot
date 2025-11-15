@@ -20,7 +20,7 @@ class TradingDecisionMaker:
         self,
         ollama_url: str | None = None,
         model: str | None = None,
-        timeout: int = 45,
+        timeout: int = 90,
         confidence_threshold: float = 0.6,
         high_risk: bool = False,
     ) -> None:
