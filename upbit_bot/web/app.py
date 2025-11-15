@@ -311,6 +311,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def balance() -> JSONResponse:
         return JSONResponse(controller.get_account_overview())
 
+    @app.get("/api/holdings")
+    async def get_holdings() -> JSONResponse:
+        """보유 코인 목록 조회 API - 실시간 시세 페이지용"""
+        try:
+            account_overview = controller.get_account_overview()
+            accounts = account_overview.get("accounts", [])
+            
+            # KRW 제외하고, 잔액이 있는 코인만 필터링
+            coins = []
+            non_tradable = {"LUNC", "APENFT", "LUNA2", "DOGE", "SHIB"}
+            
+            for account in accounts:
+                currency = account.get("currency", "")
+                balance = float(account.get("balance", 0.0))
+                
+                # KRW 제외, 잔액 없는 코인 제외, 거래 불가능한 코인 제외
+                if currency != "KRW" and balance > 0 and currency not in non_tradable:
+                    coins.append(currency)
+            
+            return JSONResponse({"coins": coins})
+        except Exception as e:  # noqa: BLE001
+            LOGGER.error(f"Failed to get holdings: {e}")
+            return JSONResponse({"coins": [], "error": str(e)}, status_code=500)
+
     @app.get("/api/stream")
     async def stream_updates() -> StreamingResponse:
         """Server-Sent Events stream for real-time updates."""
@@ -1278,36 +1302,25 @@ def _render_dashboard(
                 </div>
                 ''' if account_error else ''}
                 <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
+                    <table id="account-snapshot" class="w-full text-sm">
                 <thead>
                             <tr class="border-b-2 border-gray-300 dark:border-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800">
                                 <th class="text-left py-4 px-4 font-bold text-gray-800 dark:text-gray-200">코인</th>
                                 <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">보유량</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">매수가</th>
                                 <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">구매금액 (원)</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가</th>
                                 <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가치 (원)</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">수익/손실 (원)</th>
                             </tr>
                 </thead>
                 <tbody>
                             {''.join([f'''
-                            <tr class="table-row border-b border-gray-100 dark:border-gray-700 cursor-pointer transition-all duration-200" onclick="toggleChart('{entry.get('currency', '?')}', this)">
-                                <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')} <span class="text-xs text-gray-400 ml-1">📊</span></td>
+                            <tr class="table-row border-b border-gray-100 dark:border-gray-700 transition-all duration-200">
+                                <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')}</td>
                                 <td class="py-3 px-4 text-right text-gray-900 dark:text-white">{float(entry.get('balance', 0)):,.8f}</td>
-                                <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('avg_buy_price', 0)):,.0f}" if entry.get('avg_buy_price') and float(entry.get('avg_buy_price', 0)) > 0 else '-'}</td>
                                 <td class="py-3 px-4 text-right font-medium text-blue-600 dark:text-blue-400">{f"{float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('purchase_amount') else '-'}</td>
-                                <td class="py-3 px-4 text-right text-gray-600 dark:text-gray-400">{f"{float(entry.get('current_price', 0)):,.0f}" if entry.get('current_price') and float(entry.get('current_price', 0)) > 0 else '-'}</td>
                                 <td class="py-3 px-4 text-right font-medium text-green-600 dark:text-green-400">{f"{float(entry.get('crypto_value', 0)):,.0f}" if entry.get('crypto_value') else '-'}</td>
-                            </tr>
-                            <tr id="chart-row-{entry.get('currency', '?')}" class="hidden">
-                                <td colspan="6" class="py-4 px-4">
-                                    <div id="chart-container-{entry.get('currency', '?')}" class="w-full h-64 bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-                                        <div class="flex items-center justify-center h-full text-gray-500">
-                                            <span>📈 차트 로딩 중...</span>
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="6" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">거래 가능한 코인이 없습니다</td></tr>'}
+                                <td class="py-3 px-4 text-right font-medium {('text-green-600 dark:text-green-400' if float(entry.get('crypto_value', 0)) - float(entry.get('purchase_amount', 0)) >= 0 else 'text-red-600 dark:text-red-400')}">{f"{float(entry.get('crypto_value', 0)) - float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('crypto_value') and entry.get('purchase_amount') else '-'}</td>
+                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="5" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">거래 가능한 코인이 없습니다</td></tr>'}
                 </tbody>
             </table>
     </div>
@@ -1713,7 +1726,7 @@ def _render_dashboard(
                                     // marketData가 있으면 상세 정보 표시, 없으면 간단히 표시
                                     let message;
                                     if (marketData && Object.keys(marketData).length > 0 && marketData.current_price) {{
-                                        const price = (marketData.current_price || 0).toLocaleString('ko-KR');
+                                        const price = Math.floor(marketData.current_price || 0).toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
                                         const vol = (marketData.volatility || 0).toFixed(2);
                                         const volRatio = (marketData.volume_ratio || 0).toFixed(2);
                                         message = '[' + timestamp + '] ' + coinName + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%) | 가격: ' + price + '원 | 변동성: ' + vol + '% | 거래량: ' + volRatio + 'x';
@@ -1855,26 +1868,34 @@ def _render_dashboard(
                         }}
                         
                         const cells = row.querySelectorAll('td');
-                        if (cells.length >= 6) {{
+                        if (cells.length >= 5) {{
                             // 코인명 (이미 있음)
                             // 보유량
                             cells[1].textContent = balance.toFixed(8);
-                            // 매수가
-                            cells[2].textContent = avgBuyPrice > 0 ? avgBuyPrice.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }}) : '-';
                             // 구매금액
-                            cells[3].textContent = purchaseAmount.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
-                            // 현재가
-                            cells[4].textContent = currentPrice > 0 ? currentPrice.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }}) : '-';
+                            cells[2].textContent = purchaseAmount.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
                             // 현재가치
-                            cells[5].textContent = currentValue.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                            cells[3].textContent = currentValue.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                            // 수익/손실
+                            const pnl = currentValue - purchaseAmount;
+                            cells[4].textContent = pnl.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
                             
-                            // 수익률에 따른 색상 변경
-                            if (currentValue > purchaseAmount) {{
-                                cells[5].className = 'py-3 px-4 text-right font-medium text-green-600 dark:text-green-400';
-                            }} else if (currentValue < purchaseAmount) {{
-                                cells[5].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
+                            // 수익/손실에 따른 색상 변경
+                            if (pnl > 0) {{
+                                cells[4].className = 'py-3 px-4 text-right font-medium text-green-600 dark:text-green-400';
+                            }} else if (pnl < 0) {{
+                                cells[4].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
                             }} else {{
-                                cells[5].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
+                                cells[4].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
+                            }}
+                            
+                            // 현재가치 색상
+                            if (currentValue > purchaseAmount) {{
+                                cells[3].className = 'py-3 px-4 text-right font-medium text-green-600 dark:text-green-400';
+                            }} else if (currentValue < purchaseAmount) {{
+                                cells[3].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
+                            }} else {{
+                                cells[3].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
                             }}
                         }}
                     }} catch (err) {{
@@ -1887,22 +1908,42 @@ def _render_dashboard(
         }}
         
         // 실시간 현재가 업데이트 (기존 함수)
+        let isUpdating = false;  // 업데이트 락
         async function updateAccountValues() {{
+            // 이미 업데이트 중이면 스킵
+            if (isUpdating) {{
+                console.debug('Update already in progress, skipping...');
+                return;
+            }}
+            
+            isUpdating = true;
             try {{
-                const table = document.querySelector('table tbody');
-                if (!table) return;
+                // 자산 현황 테이블 찾기 (account-snapshot 또는 첫 번째 테이블)
+                const table = document.querySelector('#account-snapshot tbody') || document.querySelector('table tbody');
+                if (!table) {{
+                    console.debug('Table tbody not found');
+                    return;
+                }}
                 
                 const rows = table.querySelectorAll('tr');
+                if (rows.length === 0) {{
+                    console.debug('No rows found in table');
+                    return;
+                }}
+                console.debug(`Found ${{rows.length}} rows to check`);
+                
                 for (const row of rows) {{
-                    // 차트 행 제외
-                    if (row.id && row.id.startsWith('chart-row-')) continue;
-                    
                     const cells = row.querySelectorAll('td');
-                    if (cells.length < 6) continue;
+                    if (cells.length < 5) {{
+                        console.debug(`Row skipped: only ${{cells.length}} cells (need 5)`);
+                        continue;
+                    }}
                     
                     // 코인명 추출
-                    const coinText = cells[0].textContent.trim().split(' ')[0];
-                    if (!coinText || coinText === '보유한') continue;
+                    let coinText = cells[0].textContent.trim();
+                    // 공백 제거
+                    coinText = coinText.replace(/\\s+/g, '').trim();
+                    if (!coinText || coinText === '보유한' || coinText === '거래') continue;
                     
                     // 유효성 검사: 영문/숫자로만 구성된 코인만 허용
                     if (!/^[A-Z0-9]{{2,10}}$/.test(coinText)) {{
@@ -1929,31 +1970,67 @@ def _render_dashboard(
                             continue;
                         }}
                         
-                            const balance = parseFloat(cells[1].textContent);
-                            const currentPrice = data.data[data.data.length - 1].close;
-                            const currentValue = balance * currentPrice;
-                            
-                            // 현재가 업데이트
-                            cells[4].textContent = currentPrice.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
-                            
-                            // 현재가치 업데이트
-                            cells[5].textContent = currentValue.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
-                            
-                            // 초록색 또는 빨강색으로 표시
-                            const purchaseValue = parseFloat(cells[3].textContent);
-                            if (currentValue > purchaseValue) {{
-                                cells[5].className = 'py-3 px-4 text-right font-medium text-green-600 dark:text-green-400';
-                            }} else if (currentValue < purchaseValue) {{
-                                cells[5].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
-                            }} else {{
-                                cells[5].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
+                        // 보유량 파싱 (쉼표 제거 후 파싱)
+                        const balanceText = cells[1].textContent.trim().replace(/,/g, '');
+                        const balance = parseFloat(balanceText);
+                        if (isNaN(balance) || balance <= 0) {{
+                            console.debug(`Invalid balance for ${{coinText}}: ${{balanceText}}`);
+                            continue;
+                        }}
+                        
+                        // 현재가 추출
+                        const currentPrice = data.data[data.data.length - 1].close;
+                        if (!currentPrice || currentPrice <= 0) {{
+                            console.debug(`Invalid price for ${{coinText}}: ${{currentPrice}}`);
+                            continue;
+                        }}
+                        
+                        const currentValue = balance * currentPrice;
+                        
+                        // 구매금액 파싱 (쉼표 제거 후 파싱)
+                        const purchaseText = cells[2].textContent.trim().replace(/,/g, '');
+                        const purchaseValue = parseFloat(purchaseText);
+                        if (isNaN(purchaseValue) || purchaseValue <= 0) {{
+                            console.debug(`Invalid purchase value for ${{coinText}}: ${{purchaseText}}`);
+                            continue;
+                        }}
+                        
+                        const pnl = currentValue - purchaseValue;
+                        
+                        console.debug(`Updating ${{coinText}}: balance=${{balance}}, price=${{currentPrice}}, currentValue=${{currentValue}}, purchaseValue=${{purchaseValue}}, pnl=${{pnl}}`);
+                        
+                        // 현재가치 업데이트
+                        cells[3].textContent = currentValue.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                        
+                        // 수익/손실 업데이트
+                        cells[4].textContent = pnl.toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                        
+                        // 현재가치 색상
+                        if (currentValue > purchaseValue) {{
+                            cells[3].className = 'py-3 px-4 text-right font-medium text-green-600 dark:text-green-400';
+                        }} else if (currentValue < purchaseValue) {{
+                            cells[3].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
+                        }} else {{
+                            cells[3].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
+                        }}
+                        
+                        // 수익/손실 색상
+                        if (pnl > 0) {{
+                            cells[4].className = 'py-3 px-4 text-right font-medium text-green-600 dark:text-green-400';
+                        }} else if (pnl < 0) {{
+                            cells[4].className = 'py-3 px-4 text-right font-medium text-red-600 dark:text-red-400';
+                        }} else {{
+                            cells[4].className = 'py-3 px-4 text-right font-medium text-gray-600 dark:text-gray-400';
                         }}
                     }} catch (err) {{
-                        console.debug(`Price update failed for ${{coinText}}:`, err);
+                        console.error(`Price update failed for ${{coinText}}:`, err);
+                        // 개별 코인 업데이트 실패해도 계속 진행
                     }}
                 }}
             }} catch (err) {{
                 console.error('Account values update error:', err);
+            }} finally {{
+                isUpdating = false;  // 업데이트 완료 후 락 해제
             }}
         }}
         
@@ -2237,7 +2314,25 @@ def _render_dashboard(
                         
                         const price = trade.price || 0;
                         const volume = trade.volume || 0;
-                        const totalAmount = price * volume;
+                        // 매도일 때는 exit_amount 사용, 매수일 때는 amount 또는 price * volume 사용
+                        let totalAmount = 0;
+                        if (trade.side === 'sell') {{
+                            // 매도 시: exit_amount 우선, 없으면 amount, 그 다음 price * volume
+                            if (trade.exit_amount && trade.exit_amount > 0) {{
+                                totalAmount = trade.exit_amount;
+                            }} else if (trade.amount && trade.amount > 0) {{
+                                totalAmount = trade.amount;
+                            }} else {{
+                                totalAmount = price * volume;
+                            }}
+                        }} else {{
+                            // 매수 시: amount 우선, 없으면 price * volume
+                            if (trade.amount && trade.amount > 0) {{
+                                totalAmount = trade.amount;
+                            }} else {{
+                                totalAmount = price * volume;
+                            }}
+                        }}
                         
                         // pnl은 positions 테이블에서 가져오거나 계산
                         const pnl = trade.pnl || 0;
@@ -2431,12 +2526,7 @@ def _render_dashboard(
         loadTradeHistory();
         loadStatistics();
         
-        // 자동 새로고침 (20초마다) - 숫자 업데이트를 위해 필요
-        setInterval(() => {{
-            location.reload();
-        }}, 20000);  // 20초마다 페이지 새로고침
-
-        // Auto-refresh 기능 완전히 제거됨 (SSE 스트림으로 실시간 업데이트)
+        // 자동 새로고침 제거됨 (SSE 스트림으로 실시간 업데이트)
 
         // 실시간 업데이트 (5초마다)
         setInterval(() => {{

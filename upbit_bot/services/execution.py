@@ -399,11 +399,53 @@ class ExecutionEngine:
                 price=f"{stake:.0f}",
             )
             LOGGER.info("✅ BUY order placed successfully: %s", response)
-            self.position_price = last_candle.close
-            self.position_volume = est_volume
+            
+            # 실제 주문 응답에서 체결 정보 확인
+            actual_entry_amount = stake
+            actual_entry_price = last_candle.close
+            actual_entry_volume = est_volume
+            
+            # 업비트 주문 응답에서 실제 체결 정보 추출
+            if isinstance(response, dict):
+                order_uuid = response.get("uuid")
+                # 업비트 API 응답 구조: avg_price * executed_volume = 실제 체결 금액
+                executed_volume = response.get("executed_volume")
+                avg_price = response.get("avg_price")  # 평균 체결가
+                
+                # 주문 조회 API로 실제 체결 정보 확인 (응답에 체결 정보가 없을 때)
+                if (not executed_volume or not avg_price or float(executed_volume) == 0) and order_uuid:
+                    try:
+                        import time
+                        # 주문 체결 대기 (최대 2초)
+                        for _ in range(4):
+                            time.sleep(0.5)
+                            order_info = self.client.get_order(uuid=order_uuid)
+                            if isinstance(order_info, dict):
+                                executed_volume = order_info.get("executed_volume")
+                                avg_price = order_info.get("avg_price")
+                                state = order_info.get("state")
+                                
+                                if state == "done" and executed_volume and avg_price and float(executed_volume) > 0:
+                                    LOGGER.info(f"✅ BUY: Got executed info from order query - price: {float(avg_price):.0f}, volume: {float(executed_volume):.6f}")
+                                    break
+                    except Exception as e:
+                        LOGGER.warning(f"Failed to query order status: {e}")
+                
+                if executed_volume and avg_price and float(executed_volume) > 0:
+                    # 실제 체결 정보 사용
+                    actual_entry_volume = float(executed_volume)
+                    actual_entry_price = float(avg_price)
+                    actual_entry_amount = actual_entry_price * actual_entry_volume
+                    LOGGER.info(f"✅ BUY: Using actual executed data - price: {actual_entry_price:.0f}, volume: {actual_entry_volume:.6f}, amount: {actual_entry_amount:.0f}원 (expected: {stake:.0f}원)")
+                else:
+                    # 주문 응답에 체결 정보가 없거나 아직 체결 안됨 (예상 금액 사용)
+                    LOGGER.warning(f"⚠️ BUY: No executed info available (executed_volume: {executed_volume}, avg_price: {avg_price}), using estimated amount: {stake:.0f}원")
+            
+            self.position_price = actual_entry_price
+            self.position_volume = actual_entry_volume
             if self.risk_manager:
                 balance = self.position_sizer.balance_fetcher() if self.position_sizer else stake
-                stake_pct = (stake / balance * 100) if balance else 0.0
+                stake_pct = (actual_entry_amount / balance * 100) if balance else 0.0
                 self.risk_manager.register_entry(self.market, stake_pct=stake_pct)
             
             # Save trade history
@@ -413,23 +455,23 @@ class ExecutionEngine:
                 position_id = self.trade_history_store.save_position(
                     market=self.market,
                     strategy=self.strategy.name,
-                    entry_price=last_candle.close,
-                    entry_volume=est_volume,
-                    entry_amount=stake,
+                    entry_price=actual_entry_price,
+                    entry_volume=actual_entry_volume,
+                    entry_amount=actual_entry_amount,
                 )
                 self.trade_history_store.save_trade(
                     market=self.market,
                     strategy=self.strategy.name,
                     signal=signal.value,
                     side="buy",
-                    price=last_candle.close,
-                    volume=est_volume,
-                    amount=stake,
+                    price=actual_entry_price,
+                    volume=actual_entry_volume,
+                    amount=actual_entry_amount,
                     order_id=order_id,
                     order_response=response,
                     dry_run=self.dry_run,
                     balance_before=balance_before,
-                    balance_after=balance_before - stake if balance_before else None,
+                    balance_after=balance_before - actual_entry_amount if balance_before else None,
                 )
                 LOGGER.debug("Trade history saved: position_id=%s", position_id)
             except Exception as exc:  # noqa: BLE001
@@ -538,12 +580,54 @@ class ExecutionEngine:
             open_positions = self.trade_history_store.get_open_positions(market=self.market)
             if open_positions:
                 position_id = open_positions[0]["id"]
-                sell_amount = (self.position_volume or 0.0) * last_candle.close
+                
+                # 실제 주문 응답에서 체결 금액 확인
+                actual_exit_amount = sell_amount
+                actual_exit_price = last_candle.close
+                actual_exit_volume = self.position_volume or 0.0
+                
+                # 업비트 주문 응답에서 실제 체결 정보 추출
+                if isinstance(response, dict):
+                    order_uuid = response.get("uuid")
+                    # 업비트 API 응답 구조: avg_price * executed_volume = 실제 체결 금액
+                    executed_volume = response.get("executed_volume")
+                    avg_price = response.get("avg_price")  # 평균 체결가
+                    
+                    # 주문 조회 API로 실제 체결 정보 확인 (응답에 체결 정보가 없을 때)
+                    if (not executed_volume or not avg_price or float(executed_volume) == 0) and order_uuid:
+                        try:
+                            import time
+                            # 주문 체결 대기 (최대 2초)
+                            for _ in range(4):
+                                time.sleep(0.5)
+                                order_info = self.client.get_order(uuid=order_uuid)
+                                if isinstance(order_info, dict):
+                                    executed_volume = order_info.get("executed_volume")
+                                    avg_price = order_info.get("avg_price")
+                                    state = order_info.get("state")
+                                    
+                                    if state == "done" and executed_volume and avg_price and float(executed_volume) > 0:
+                                        LOGGER.info(f"✅ SELL: Got executed info from order query - price: {float(avg_price):.0f}, volume: {float(executed_volume):.6f}")
+                                        break
+                        except Exception as e:
+                            LOGGER.warning(f"Failed to query order status: {e}")
+                    
+                    if executed_volume and avg_price and float(executed_volume) > 0:
+                        # 실제 체결 정보 사용
+                        actual_exit_volume = float(executed_volume)
+                        actual_exit_price = float(avg_price)
+                        actual_exit_amount = actual_exit_price * actual_exit_volume
+                        LOGGER.info(f"✅ SELL: Using actual executed data - price: {actual_exit_price:.0f}, volume: {actual_exit_volume:.6f}, amount: {actual_exit_amount:.0f}원 (expected: {sell_amount:.0f}원)")
+                    else:
+                        # 주문 응답에 체결 정보가 없으면 예상 금액 사용
+                        LOGGER.warning(f"⚠️ SELL: No executed info available (executed_volume: {executed_volume}, avg_price: {avg_price}), using estimated amount: {sell_amount:.0f}원")
+                        LOGGER.debug(f"Full response: {response}")
+                
                 self.trade_history_store.close_position(
                     position_id=position_id,
-                    exit_price=last_candle.close,
-                    exit_volume=self.position_volume or 0.0,
-                    exit_amount=sell_amount,
+                    exit_price=actual_exit_price,
+                    exit_volume=actual_exit_volume,
+                    exit_amount=actual_exit_amount,
                 )
                 balance_before = self.position_sizer.balance_fetcher() if self.position_sizer else None
                 order_id = response.get("uuid") if isinstance(response, dict) else None
@@ -552,14 +636,14 @@ class ExecutionEngine:
                     strategy=self.strategy.name,
                     signal=signal.value,
                     side="sell",
-                    price=last_candle.close,
-                    volume=self.position_volume or 0.0,
-                    amount=sell_amount,
+                    price=actual_exit_price,
+                    volume=actual_exit_volume,
+                    amount=actual_exit_amount,
                     order_id=order_id,
                     order_response=response,
                     dry_run=self.dry_run,
                     balance_before=balance_before,
-                    balance_after=balance_before + sell_amount if balance_before else None,
+                    balance_after=balance_before + actual_exit_amount if balance_before else None,
                 )
                 LOGGER.debug("Trade history saved: position_id=%s closed", position_id)
         except Exception as exc:  # noqa: BLE001
@@ -579,7 +663,7 @@ class ExecutionEngine:
 
     def _analyze_multiple_markets(self) -> tuple[str | None, StrategySignal, list[Candle]]:
         """
-        AI 전략일 때 여러 코인을 분석하여 최적의 코인 선택.
+        AI 전략일 때 여러 코인을 분석하여 최적의 코인 선택 (이중 Ollama 아키텍처).
         
         Returns:
             (선택된 market, signal, candles)
@@ -592,31 +676,48 @@ class ExecutionEngine:
             signal = self.strategy.on_candles(candles)
             return self.market, signal, candles
         
-        # AI 전략: 여러 코인 분석
+        # AI 전략: 이중 Ollama 엔진 사용
         try:
+            from .dual_ollama_engine import DualOllamaEngine
+            
+            # 이중 Ollama 엔진 초기화 (전략에 이미 있으면 재사용)
+            if hasattr(self.strategy, '_get_dual_engine'):
+                dual_engine = self.strategy._get_dual_engine()
+            elif hasattr(self.strategy, 'dual_engine') and self.strategy.dual_engine:
+                dual_engine = self.strategy.dual_engine
+            else:
+                is_high_risk = self.strategy.name == "ai_market_analyzer_high_risk"
+                confidence_threshold = (
+                    getattr(self.strategy, 'confidence_threshold', 0.4)
+                    if is_high_risk
+                    else 0.6
+                )
+                dual_engine = DualOllamaEngine(
+                    confidence_threshold=confidence_threshold,
+                    high_risk=is_high_risk,
+                )
+            
             # 거래량 상위 10개 코인 가져오기
             markets = self.client.get_top_volume_markets(limit=10)
-            LOGGER.info(f"Selected top 10 markets by volume for AI strategy analysis: {markets}")
-            
-            best_market: str | None = None
-            best_signal: StrategySignal = StrategySignal.HOLD
-            best_candles: list[Candle] = []
-            best_confidence = 0.0
-            best_analysis: dict | None = None  # 최고 신뢰도 분석 결과 저장
+            LOGGER.info(f"거래량 상위 10개 코인 선택: {markets}")
             
             # 이미 포지션이 있는 코인은 제외
             portfolio = self.get_portfolio_status()
             open_markets = {pos.get("market") for pos in portfolio.get("open_positions", [])}
-            
-            # 거래량 상위 10개 중에서 포지션이 없는 코인만 분석
             markets_to_analyze = [m for m in markets if m not in open_markets]
             
-            LOGGER.info(f"Starting AI analysis for {len(markets_to_analyze)} markets...")
+            if not markets_to_analyze:
+                LOGGER.info("분석할 코인이 없음 (모두 포지션 보유 중)")
+                candles = self._fetch_candles()
+                signal = self.strategy.on_candles(candles)
+                return self.market, signal, candles
             
-            for idx, market in enumerate(markets_to_analyze, 1):
-                LOGGER.info(f"[{idx}/{len(markets_to_analyze)}] Analyzing {market}...")
+            LOGGER.info(f"이중 Ollama 분석 시작: {len(markets_to_analyze)}개 코인")
+            
+            # 모든 코인의 캔들 데이터 수집
+            markets_data: dict[str, list[Candle]] = {}
+            for market in markets_to_analyze:
                 try:
-                    # 캔들 데이터 가져오기 (SSE 스트림용으로는 적은 개수 사용)
                     raw = self.client.get_candles(market, unit=self.candle_unit, count=min(self.candle_count, 20))
                     if not raw:
                         continue
@@ -633,58 +734,58 @@ class ExecutionEngine:
                         for item in reversed(raw)
                     ]
                     
-                    if len(candles_list) < 5:
-                        continue
-                    
-                    # AI 분석 실행
-                    signal = self.strategy.on_candles(candles_list)
-                    
-                    # 분석 결과 가져오기
-                    if hasattr(self.strategy, 'last_analysis') and self.strategy.last_analysis:
-                        confidence = self.strategy.last_analysis.get('confidence', 0.0)
-                        
-                        LOGGER.info(f"  {market}: {signal.value} (confidence: {confidence:.2%})")
-                        
-                        # BUY 신호이고 신뢰도가 더 높으면 업데이트
-                        if signal == StrategySignal.BUY and confidence > best_confidence:
-                            best_market = market
-                            best_signal = signal
-                            best_candles = candles_list
-                            best_confidence = confidence
-                            # 최고 신뢰도 분석 결과 저장
-                            best_analysis = self.strategy.last_analysis.copy()
-                            
-                            LOGGER.info(
-                                f"  ✅ Better signal found: {market} {signal.value} "
-                                f"(confidence: {confidence:.2%})"
-                            )
-                    else:
-                        LOGGER.warning(f"  {market}: No analysis result available")
-                
+                    if len(candles_list) >= 5:
+                        markets_data[market] = candles_list
                 except Exception as e:
-                    LOGGER.warning(f"Failed to analyze {market}: {e}")
+                    LOGGER.warning(f"코인 {market} 캔들 데이터 수집 실패: {e}")
                     continue
             
-            if best_market:
-                LOGGER.info(
-                    f"✅ Selected market: {best_market} with {best_signal.value} "
-                    f"(confidence: {best_confidence:.2%})"
-                )
-                # 선택된 코인으로 market 업데이트
-                self.market = best_market
-                # 최종 분석 결과를 best_market의 분석 결과로 설정
-                if best_analysis:
-                    self.strategy.last_analysis = best_analysis
-                return best_market, best_signal, best_candles
-            else:
-                # 신호가 없으면 기존 market 유지
-                LOGGER.info("No BUY signal found, using default market")
+            if not markets_data:
+                LOGGER.warning("유효한 캔들 데이터가 없음")
                 candles = self._fetch_candles()
                 signal = self.strategy.on_candles(candles)
                 return self.market, signal, candles
+            
+            # 시장 상황 정보 수집
+            market_context = {
+                "total_balance": portfolio.get("total_balance", 0),
+                "krw_balance": portfolio.get("krw_balance", 0),
+                "max_positions": MAX_POSITIONS,
+                "current_positions": len(portfolio.get("open_positions", [])),
+                "risk_level": "medium" if self.strategy.name == "ai_market_analyzer" else "high",
+                "market_trend": "unknown",
+                "min_order_amount": self.min_order_amount,
+            }
+            
+            # 이중 Ollama 엔진으로 분석
+            signal, selected_market, confidence, analysis_data = dual_engine.analyze_markets(
+                markets_data=markets_data,
+                current_portfolio=portfolio,
+                market_context=market_context,
+            )
+            
+            # 분석 결과 저장
+            if hasattr(self.strategy, 'last_analysis'):
+                self.strategy.last_analysis = analysis_data
+            
+            # 선택된 코인으로 market 업데이트
+            if selected_market:
+                self.market = selected_market
+                candles = markets_data.get(selected_market, self._fetch_candles())
+                
+                LOGGER.info(
+                    f"✅ 이중 Ollama 분석 완료: {selected_market} {signal.value} "
+                    f"(신뢰도: {confidence:.2%})"
+                )
+                return selected_market, signal, candles
+            else:
+                # 신호가 없으면 기존 market 유지
+                LOGGER.info("매매 신호 없음, 기본 코인 유지")
+                candles = self._fetch_candles()
+                return self.market, signal, candles
                 
         except Exception as e:
-            LOGGER.error(f"Multi-market analysis failed: {e}, using default market")
+            LOGGER.error(f"이중 Ollama 분석 실패: {e}, 기본 코인 사용", exc_info=True)
             candles = self._fetch_candles()
             signal = self.strategy.on_candles(candles)
             return self.market, signal, candles
@@ -903,12 +1004,25 @@ class ExecutionEngine:
         """
         현재 포트폴리오 상태 조회.
         
+        웹페이지 자산현황 기준: 실제 계정 잔액이 있는 것만 포지션으로 인정
+        
         반환:
-        - total_positions: 열린 포지션 개수
-        - open_positions: 열린 포지션 목록 (수익률 순 정렬)
+        - total_positions: 열린 포지션 개수 (실제 잔액 기준)
+        - open_positions: 열린 포지션 목록 (수익률 순 정렬, 실제 잔액 기준)
         - worst_position: 가장 낮은 수익률 포지션
         """
         try:
+            # 실제 계정 잔액 확인
+            accounts = self.client.get_accounts()
+            actual_balances = {}
+            for account in accounts:
+                currency = account.get("currency", "")
+                if currency != "KRW":
+                    balance = float(account.get("balance", 0))
+                    if balance > 0:
+                        actual_balances[currency] = balance
+            
+            # DB에서 열린 포지션 조회
             positions = self.trade_history_store.get_open_positions()
             
             if not positions:
@@ -918,13 +1032,38 @@ class ExecutionEngine:
                     "worst_position": None,
                 }
             
-            # 각 포지션의 현재가 및 수익률 계산
+            # 각 포지션의 현재가 및 수익률 계산 (실제 잔액이 있는 것만)
             positions_with_pnl = []
+            cleaned_positions = []  # 실제 잔액 없는 포지션 목록
             
             for pos in positions:
                 market = pos.get("market")
+                currency = market.replace("KRW-", "")
                 entry_price = float(pos.get("entry_price", 0))
                 entry_volume = float(pos.get("entry_volume", 0))
+                
+                # 실제 계정 잔액 확인
+                actual_balance = actual_balances.get(currency, 0.0)
+                
+                # 실제 잔액이 없으면 포지션 정리 (웹페이지 자산현황에 없으면 없는 것)
+                if actual_balance <= 0:
+                    try:
+                        position_id = pos.get("id")
+                        LOGGER.info(f"Cleaning up position {position_id} for {market}: no actual balance (entry_volume: {entry_volume}, entry_amount: {entry_amount:.0f}원)")
+                        # 포지션을 강제로 종료 (실제로 손실 처리 - 매수 금액만큼 손실)
+                        # exit_amount는 0이지만 entry_amount만큼 손실로 기록
+                        entry_amount = float(pos.get("entry_amount", 0))
+                        self.trade_history_store.close_position(
+                            position_id=position_id,
+                            exit_price=entry_price,  # 매수가 기준
+                            exit_volume=0.0,
+                            exit_amount=0.0,  # 실제로 받은 금액은 0
+                        )
+                        # PnL은 close_position에서 자동 계산됨: exit_amount(0) - entry_amount = -entry_amount
+                        cleaned_positions.append(f"{market} (손실: {entry_amount:.0f}원)")
+                    except Exception as e:
+                        LOGGER.warning(f"Failed to clean up position for {market}: {e}")
+                    continue
                 
                 try:
                     # 현재가 조회
@@ -933,19 +1072,25 @@ class ExecutionEngine:
                         continue
                     
                     current_price = float(ticker.get("trade_price", 0))
+                    # 실제 잔액 기준으로 수익률 계산
+                    actual_value = actual_balance * current_price
                     pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
-                    current_value = entry_volume * current_price
                     
                     positions_with_pnl.append({
                         **pos,
                         "current_price": current_price,
                         "pnl_pct": pnl_pct,
-                        "current_value": current_value,
+                        "current_value": actual_value,
+                        "actual_balance": actual_balance,  # 실제 잔액 추가
+                        "entry_volume": entry_volume,  # DB 기록
                     })
                     
                 except Exception as e:
                     LOGGER.warning(f"Failed to get price for {market}: {e}")
                     continue
+            
+            if cleaned_positions:
+                LOGGER.info(f"Cleaned up {len(cleaned_positions)} positions with no actual balance: {cleaned_positions}")
             
             # 수익률 기준 정렬 (가장 낮은 것부터)
             positions_with_pnl.sort(key=lambda x: x.get("pnl_pct", 0))
@@ -981,8 +1126,9 @@ class ExecutionEngine:
         작동:
         1. 포트폴리오 상태 확인
         2. 가장 낮은 수익률 포지션 찾기
-        3. 해당 포지션 시장가 매도
-        4. 결과 반환
+        3. 실제 계정 잔액 확인
+        4. 해당 포지션 시장가 매도
+        5. 결과 반환
         """
         result = {
             "status": "liquidate_worst",
@@ -1003,44 +1149,139 @@ class ExecutionEngine:
             current_price = float(worst_pos.get("current_price", 0))
             pnl_pct = worst_pos.get("pnl_pct", 0)
             
-            sell_amount = entry_volume * current_price
+            # 실제 계정 잔액 확인
+            currency = market.replace("KRW-", "")
+            actual_balance = 0.0
+            try:
+                accounts = self.client.get_accounts()
+                for account in accounts:
+                    if account.get("currency") == currency:
+                        actual_balance = float(account.get("balance", 0))
+                        break
+            except Exception as e:
+                LOGGER.warning(f"Failed to get actual balance for {market}: {e}")
+            
+            # 실제 잔액과 DB 기록 중 더 작은 값 사용
+            sell_volume = min(entry_volume, actual_balance) if actual_balance > 0 else entry_volume
+            
+            if sell_volume <= 0:
+                result["error"] = f"No balance available for {market} (entry_volume: {entry_volume}, actual_balance: {actual_balance})"
+                LOGGER.error(result["error"])
+                return result
+            
+            sell_amount = sell_volume * current_price
             
             # 최소 금액 체크
             if sell_amount < 5000:
-                result["error"] = f"Sell amount {sell_amount:.0f}원 < 5,000원"
+                result["error"] = f"Sell amount {sell_amount:.0f}원 < 5,000원 (volume: {sell_volume}, price: {current_price})"
+                LOGGER.warning(result["error"])
                 return result
             
             LOGGER.info(
                 f"Liquidating worst position: {market} "
-                f"(PnL: {pnl_pct:.2f}%, Amount: {sell_amount:.0f}원)"
+                f"(PnL: {pnl_pct:.2f}%, Volume: {sell_volume:.6f}, Amount: {sell_amount:.0f}원, "
+                f"entry_volume: {entry_volume:.6f}, actual_balance: {actual_balance:.6f})"
             )
             
-            # 시장가 매도
+            # 시장가 매도 (실제 잔액 기준)
             order = self.client.place_order(
                 market=market,
                 side="ask",
-                volume=str(entry_volume),
+                volume=str(sell_volume),
                 ord_type="market",
             )
+            
+            # 청산 후 포지션 업데이트
+            try:
+                open_positions = self.trade_history_store.get_open_positions(market=market)
+                if open_positions:
+                    position_id = open_positions[0]["id"]
+                    
+                    # 실제 주문 응답에서 체결 금액 확인
+                    actual_exit_amount = sell_amount
+                    actual_exit_price = current_price
+                    actual_exit_volume = sell_volume
+                    
+                    # 업비트 주문 응답에서 실제 체결 정보 추출
+                    if isinstance(order, dict):
+                        order_uuid = order.get("uuid")
+                        # 업비트 API 응답 구조: avg_price * executed_volume = 실제 체결 금액
+                        executed_volume = order.get("executed_volume")
+                        avg_price = order.get("avg_price")  # 평균 체결가
+                        
+                        # 주문 조회 API로 실제 체결 정보 확인 (응답에 체결 정보가 없을 때)
+                        if (not executed_volume or not avg_price or float(executed_volume) == 0) and order_uuid:
+                            try:
+                                import time
+                                # 주문 체결 대기 (최대 2초)
+                                for _ in range(4):
+                                    time.sleep(0.5)
+                                    order_info = self.client.get_order(uuid=order_uuid)
+                                    if isinstance(order_info, dict):
+                                        executed_volume = order_info.get("executed_volume")
+                                        avg_price = order_info.get("avg_price")
+                                        state = order_info.get("state")
+                                        
+                                        if state == "done" and executed_volume and avg_price and float(executed_volume) > 0:
+                                            LOGGER.info(f"✅ LIQUIDATION: Got executed info from order query")
+                                            break
+                            except Exception as e:
+                                LOGGER.warning(f"Failed to query liquidation order status: {e}")
+                        
+                        if executed_volume and avg_price and float(executed_volume) > 0:
+                            # 실제 체결 정보 사용
+                            actual_exit_volume = float(executed_volume)
+                            actual_exit_price = float(avg_price)
+                            actual_exit_amount = actual_exit_price * actual_exit_volume
+                            LOGGER.info(f"✅ LIQUIDATION: Using actual executed data - price: {actual_exit_price:.0f}, volume: {actual_exit_volume:.6f}, amount: {actual_exit_amount:.0f}원 (expected: {sell_amount:.0f}원)")
+                        else:
+                            LOGGER.warning(f"⚠️ LIQUIDATION: No executed info available, using estimated amount: {sell_amount:.0f}원")
+                    
+                    self.trade_history_store.close_position(
+                        position_id=position_id,
+                        exit_price=actual_exit_price,
+                        exit_volume=actual_exit_volume,
+                        exit_amount=actual_exit_amount,
+                    )
+                    # 매도 거래 기록
+                    balance_before = self.position_sizer.balance_fetcher() if self.position_sizer else None
+                    order_id = order.get("uuid") if isinstance(order, dict) else None
+                    self.trade_history_store.save_trade(
+                        market=market,
+                        strategy=self.strategy.name,
+                        signal="LIQUIDATE",
+                        side="sell",
+                        price=actual_exit_price,
+                        volume=actual_exit_volume,
+                        amount=actual_exit_amount,
+                        order_id=order_id,
+                        order_response=order,
+                        dry_run=self.dry_run,
+                        balance_before=balance_before,
+                        balance_after=balance_before + actual_exit_amount if balance_before else None,
+                    )
+                    LOGGER.info(f"Liquidation trade saved: position_id={position_id}")
+            except Exception as exc:
+                LOGGER.warning(f"Failed to save liquidation trade history: {exc}")
             
             result.update({
                 "success": True,
                 "market": market,
-                "volume": entry_volume,
+                "volume": sell_volume,
                 "price": current_price,
                 "amount": sell_amount,
                 "pnl_pct": pnl_pct,
-                "order_id": order.get("uuid"),
+                "order_id": order.get("uuid") if isinstance(order, dict) else None,
                 "message": f"{market} 청산 완료 (수익률: {pnl_pct:.2f}%)",
             })
             
             LOGGER.info(
-                f"Worst position liquidated: {market} @ {current_price} "
+                f"✅ Worst position liquidated: {market} @ {current_price} "
                 f"= {sell_amount:.0f}원 (PnL: {pnl_pct:.2f}%)"
             )
             
         except Exception as e:
             result["error"] = str(e)
-            LOGGER.error(f"Failed to liquidate worst position: {e}")
+            LOGGER.error(f"❌ Failed to liquidate worst position: {e}", exc_info=True)
         
         return result

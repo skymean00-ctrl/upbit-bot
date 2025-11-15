@@ -112,11 +112,33 @@ class TradeHistoryStore:
             return cursor.lastrowid
 
     def get_recent_trades(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Get recent trades."""
+        """Get recent trades with PnL information from positions."""
         cursor = self._conn.execute(
             """
-            SELECT * FROM trades
-            ORDER BY timestamp DESC
+            SELECT 
+                t.*,
+                p.pnl,
+                p.pnl_pct,
+                p.entry_price,
+                p.entry_amount,
+                p.exit_price,
+                p.exit_amount
+            FROM trades t
+            LEFT JOIN positions p ON (
+                t.market = p.market 
+                AND t.side = 'sell'
+                AND p.status = 'closed'
+                AND p.exit_time = (
+                    SELECT exit_time 
+                    FROM positions p2 
+                    WHERE p2.market = t.market 
+                    AND p2.status = 'closed'
+                    AND p2.exit_time <= t.timestamp
+                    ORDER BY p2.exit_time DESC 
+                    LIMIT 1
+                )
+            )
+            ORDER BY t.timestamp DESC
             LIMIT ?
             """,
             (limit,),

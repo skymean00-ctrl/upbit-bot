@@ -59,6 +59,31 @@ class UpbitClient:
         if response.status_code >= 400:
             raise UpbitAPIError(f"{response.status_code} {response.text}")
         return response.json()
+    
+    def get_order(self, uuid: str | None = None, identifier: str | None = None) -> Any:
+        """Get order information."""
+        params: dict[str, Any] = {}
+        if uuid:
+            params["uuid"] = uuid
+        if identifier:
+            params["identifier"] = identifier
+        
+        query_string = urlencode(params)
+        query_hash = sha512(query_string.encode()).hexdigest()
+        
+        headers = self._headers(
+            extra_payload={"query_hash": query_hash, "query_hash_alg": "SHA512"},
+        )
+        response = self.session.request(
+            "GET",
+            f"{self.REST_ENDPOINT}/order",
+            headers=headers,
+            params=params,
+            timeout=self.timeout,
+        )
+        if response.status_code >= 400:
+            raise UpbitAPIError(f"{response.status_code} {response.text}")
+        return response.json()
 
     def get_accounts(self) -> Any:
         return self._request("GET", "/accounts")
@@ -87,6 +112,31 @@ class UpbitClient:
         # Public API 사용
         url = f"{self.REST_ENDPOINT}/market/all"
         response = self.session.request("GET", url, timeout=self.timeout)
+        if response.status_code >= 400:
+            raise UpbitAPIError(f"{response.status_code} {response.text}")
+        return response.json()
+    
+    def get_order(self, uuid: str | None = None, identifier: str | None = None) -> Any:
+        """Get order information."""
+        params: dict[str, Any] = {}
+        if uuid:
+            params["uuid"] = uuid
+        if identifier:
+            params["identifier"] = identifier
+        
+        query_string = urlencode(params)
+        query_hash = sha512(query_string.encode()).hexdigest()
+        
+        headers = self._headers(
+            extra_payload={"query_hash": query_hash, "query_hash_alg": "SHA512"},
+        )
+        response = self.session.request(
+            "GET",
+            f"{self.REST_ENDPOINT}/order",
+            headers=headers,
+            params=params,
+            timeout=self.timeout,
+        )
         if response.status_code >= 400:
             raise UpbitAPIError(f"{response.status_code} {response.text}")
         return response.json()
@@ -191,6 +241,31 @@ class UpbitClient:
         response = self.session.request(
             "POST",
             f"{self.REST_ENDPOINT}/orders",
+            headers=headers,
+            params=params,
+            timeout=self.timeout,
+        )
+        if response.status_code >= 400:
+            raise UpbitAPIError(f"{response.status_code} {response.text}")
+        return response.json()
+    
+    def get_order(self, uuid: str | None = None, identifier: str | None = None) -> Any:
+        """Get order information."""
+        params: dict[str, Any] = {}
+        if uuid:
+            params["uuid"] = uuid
+        if identifier:
+            params["identifier"] = identifier
+        
+        query_string = urlencode(params)
+        query_hash = sha512(query_string.encode()).hexdigest()
+        
+        headers = self._headers(
+            extra_payload={"query_hash": query_hash, "query_hash_alg": "SHA512"},
+        )
+        response = self.session.request(
+            "GET",
+            f"{self.REST_ENDPOINT}/order",
             headers=headers,
             params=params,
             timeout=self.timeout,

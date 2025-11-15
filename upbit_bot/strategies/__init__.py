@@ -1,6 +1,7 @@
 """Strategy interfaces and implementations."""
 
 from .ai_market_analyzer import AIMarketAnalyzer
+from .ai_market_analyzer_high_risk import AIMarketAnalyzerHighRisk
 from .base import Candle, Strategy, StrategySignal
 from .bb_squeeze import BBSqueezeStrategy
 from .combined_strategy import CombinedStrategy
@@ -30,4 +31,5 @@ __all__ = [
     "SupportResistanceStrategy",
     "VolumeProfileStrategy",
     "AIMarketAnalyzer",
+    "AIMarketAnalyzerHighRisk",
 ]

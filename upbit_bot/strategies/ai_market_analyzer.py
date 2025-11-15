@@ -1,30 +1,18 @@
-"""AI-powered market analysis strategy using local Ollama."""
+"""AI-powered market analysis strategy using dual Ollama architecture."""
 
 from __future__ import annotations
 
-import json
 import logging
-import statistics
 from collections.abc import Iterable
 from typing import Any
-
-import requests
 
 from .base import Candle, Strategy, StrategySignal
 
 LOGGER = logging.getLogger(__name__)
 
-# Ollama 설정
-import os
-# 기존 서버 연결 (100.98.189.30) 사용, 환경 변수로 덮어쓰기 가능
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://100.98.189.30:11434")  # 기존 서버 기본값
-# 모델 고정: qwen2.5-coder:7b (속도: 2.37초, 확실성: 높음, JSON 형식 올바름)
-# llama3.1:8b (15.57초 - 너무 느림), deepseek-r1:7b (응답 실패)
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")  # 가장 빠르고 확실한 모델 고정
-
 
 class AIMarketAnalyzer(Strategy):
-    """AI 기반 실시간 시장 분석 전략."""
+    """AI 기반 실시간 시장 분석 전략 (이중 Ollama 아키텍처)."""
 
     name = "ai_market_analyzer"
 
@@ -39,200 +27,51 @@ class AIMarketAnalyzer(Strategy):
         self.confidence_threshold = confidence_threshold
         self.last_signal = StrategySignal.HOLD
         self.last_analysis = None
-        self._verify_ollama_connection()
+        # Lazy import to avoid circular dependency
+        self.dual_engine = None
 
-    def _verify_ollama_connection(self) -> None:
-        """Ollama 서버 연결 확인."""
-        try:
-            response = requests.get(
-                f"{OLLAMA_BASE_URL}/api/tags",
-                timeout=5,
+    def _get_dual_engine(self):
+        """Lazy initialization of dual engine."""
+        if self.dual_engine is None:
+            from upbit_bot.services.dual_ollama_engine import DualOllamaEngine
+            
+            self.dual_engine = DualOllamaEngine(
+                confidence_threshold=self.confidence_threshold,
+                high_risk=False,
             )
-            if response.status_code == 200:
-                models = response.json().get("models", [])
-                LOGGER.info(f"Ollama 연결 성공. 사용 가능한 모델: {len(models)}개")
+            
+            # Ollama 연결 확인
+            if self.dual_engine.scanner.client.verify_connection():
+                LOGGER.info("Ollama 스캐너 연결 확인됨")
             else:
-                LOGGER.warning(
-                    f"Ollama 응답 오류: {response.status_code}"
-                )
-        except requests.exceptions.RequestException as e:
-            LOGGER.error(f"Ollama 연결 실패: {e}")
-
-    def _calculate_technical_indicators(self, candles: list[Candle]) -> dict[str, Any]:
-        """기술적 지표 계산."""
-        if len(candles) < 20:
-            return {}
-
-        closes = [c.close for c in candles]
-        volumes = [c.volume for c in candles]
-
-        # 이동평균선
-        ma_5 = statistics.mean(closes[-5:])
-        ma_10 = statistics.mean(closes[-10:])
-        ma_20 = statistics.mean(closes[-20:])
-
-        # 변동성 (표준편차)
-        volatility = statistics.stdev(closes[-20:]) / ma_20 * 100
-
-        # 최근 가격 변화
-        recent_change = ((closes[-1] - closes[-5]) / closes[-5]) * 100
-
-        # 평균 거래량
-        avg_volume = statistics.mean(volumes[-10:])
-        current_volume = volumes[-1]
-        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
-
-        return {
-            "current_price": closes[-1],
-            "ma_5": ma_5,
-            "ma_10": ma_10,
-            "ma_20": ma_20,
-            "volatility": volatility,
-            "recent_change": recent_change,
-            "volume_ratio": volume_ratio,
-            "trend": "uptrend" if ma_5 > ma_10 > ma_20 else "downtrend",
-        }
-
-    def _query_ollama(self, market_data: dict[str, Any]) -> tuple[StrategySignal, float]:
-        """
-        Ollama AI에 시장 분석 요청.
-
-        Returns:
-            (신호, 신뢰도)
-        """
-        prompt = f"""당신은 암호화폐 거래 전문가입니다.
-다음 시장 데이터를 분석하고 매매 신호를 제시하세요.
-
-시장 데이터:
-- 현재 가격: {market_data['current_price']:,.0f} 원
-- 5분 이동평균: {market_data['ma_5']:,.0f}
-- 10분 이동평균: {market_data['ma_10']:,.0f}
-- 20분 이동평균: {market_data['ma_20']:,.0f}
-- 변동성: {market_data['volatility']:.2f}%
-- 최근 5분 변화: {market_data['recent_change']:+.2f}%
-- 거래량 비율: {market_data['volume_ratio']:.2f}x
-- 트렌드: {market_data['trend']}
-
-다음 중 하나를 선택하세요:
-1. BUY - 강한 상승 신호
-2. SELL - 강한 하락 신호  
-3. HOLD - 신호 없음
-
-선택 이유와 신뢰도(0.0~1.0)를 JSON으로 응답하세요:
-{{"signal": "BUY|SELL|HOLD", "confidence": 0.0~1.0, "reason": "이유"}}"""
-
-        try:
-            LOGGER.debug(f"Ollama 분석 요청 시작: {OLLAMA_BASE_URL}/api/generate")
-            response = requests.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json={
-                    "model": OLLAMA_MODEL,
-                    "prompt": prompt,
-                    "stream": False,
-                    "temperature": 0.3,  # 낮은 온도 = 더 결정적
-                },
-                timeout=45,  # 1분 주기 내에 충분한 시간 확보
-            )
-
-            if response.status_code != 200:
-                LOGGER.error(f"Ollama API 오류: HTTP {response.status_code}")
-                LOGGER.error(f"응답 내용: {response.text[:200]}")
-                return StrategySignal.HOLD, 0.0
-
-            result = response.json()
-            response_text = result.get("response", "")
-            
-            if not response_text:
-                LOGGER.warning("Ollama 응답이 비어있음")
-                return StrategySignal.HOLD, 0.0
-            
-            LOGGER.debug(f"Ollama 응답 수신: {len(response_text)} 문자")
-
-            # JSON 파싱 시도
-            try:
-                # JSON 부분 추출
-                json_start = response_text.find("{")
-                json_end = response_text.rfind("}") + 1
-                if json_start >= 0 and json_end > json_start:
-                    json_str = response_text[json_start:json_end]
-                    data = json.loads(json_str)
-
-                    signal_str = data.get("signal", "HOLD").upper()
-                    confidence = float(data.get("confidence", 0.0))
-
-                    # 신뢰도에 따라 신호 결정
-                    if confidence < self.confidence_threshold:
-                        return StrategySignal.HOLD, confidence
-
-                    if signal_str == "BUY":
-                        return StrategySignal.BUY, confidence
-                    elif signal_str == "SELL":
-                        return StrategySignal.SELL, confidence
-
-                    return StrategySignal.HOLD, confidence
-            except (json.JSONDecodeError, ValueError) as e:
-                LOGGER.warning(f"응답 파싱 실패: {e}")
-                # 응답 텍스트에서 신호 검색
-                if "buy" in response_text.lower():
-                    return StrategySignal.BUY, 0.5
-                elif "sell" in response_text.lower():
-                    return StrategySignal.SELL, 0.5
-
-            return StrategySignal.HOLD, 0.0
-
-        except requests.exceptions.Timeout:
-            LOGGER.error(f"Ollama 요청 시간 초과 (45초) - 서버가 너무 느리거나 모델이 응답하지 않음")
-            return StrategySignal.HOLD, 0.0
-        except requests.exceptions.ConnectionError as e:
-            LOGGER.error(f"Ollama 연결 실패: {e} - 서버가 실행 중인지 확인: {OLLAMA_BASE_URL}")
-            return StrategySignal.HOLD, 0.0
-        except requests.exceptions.RequestException as e:
-            LOGGER.error(f"Ollama 요청 실패: {type(e).__name__}: {e}")
-            return StrategySignal.HOLD, 0.0
-        except Exception as e:
-            LOGGER.error(f"Ollama 처리 중 예기치 않은 오류: {type(e).__name__}: {e}", exc_info=True)
-            return StrategySignal.HOLD, 0.0
+                LOGGER.warning("Ollama 스캐너 연결 실패")
+                
+            if self.dual_engine.decision_maker.client.verify_connection():
+                LOGGER.info("Ollama 결정자 연결 확인됨")
+            else:
+                LOGGER.warning("Ollama 결정자 연결 실패")
+        
+        return self.dual_engine
 
     def on_candles(self, candles: Iterable[Candle]) -> StrategySignal:
-        """생성된 캔들을 기반으로 신호 생성."""
+        """생성된 캔들을 기반으로 신호 생성 (단일 코인용 - 호환성 유지)."""
         candles_list = list(candles)
         if len(candles_list) < 5:
-            # 최소 데이터가 없어도 기본 분석 결과 저장 (콘솔 표시용)
             self.last_analysis = {
-                "market_data": {},
                 "signal": StrategySignal.HOLD,
                 "confidence": 0.0,
-                "status": "insufficient_data"
+                "status": "insufficient_data",
             }
             return StrategySignal.HOLD
 
-        # 기술적 지표 계산
-        market_data = self._calculate_technical_indicators(candles_list)
-        if not market_data:
-            # 기술적 지표 계산 실패 시에도 기본 결과 저장
-            self.last_analysis = {
-                "market_data": {},
-                "signal": StrategySignal.HOLD,
-                "confidence": 0.0,
-                "status": "calculation_failed"
-            }
-            return StrategySignal.HOLD
-
-        # AI 분석
-        signal, confidence = self._query_ollama(market_data)
-
-        # 결과 저장 (로깅용) - 항상 저장하여 콘솔에 표시 가능하도록
+        # 단일 코인 모드에서는 HOLD 반환
+        # 실제 분석은 ExecutionEngine._analyze_multiple_markets()에서 이중 Ollama로 수행됨
         self.last_analysis = {
-            "market_data": market_data,
-            "signal": signal,
-            "confidence": confidence,
-            "status": "completed"
+            "signal": StrategySignal.HOLD,
+            "confidence": 0.0,
+            "status": "single_coin_mode",
+            "note": "이중 Ollama 분석은 ExecutionEngine._analyze_multiple_markets()에서 수행됩니다",
         }
 
-        LOGGER.info(
-            f"AI 분석: {signal.value} (신뢰도: {confidence:.2%})"
-        )
-
-        self.last_signal = signal
-        return signal
+        return StrategySignal.HOLD
 
