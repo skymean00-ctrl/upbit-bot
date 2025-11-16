@@ -12,12 +12,15 @@ from typing import Any, AsyncGenerator, Optional
 import requests
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
 
 from upbit_bot.config import Settings, load_settings
 from upbit_bot.core import UpbitClient
 from upbit_bot.data.performance_tracker import PerformanceTracker
 from upbit_bot.data.trade_history import TradeHistoryStore
 from upbit_bot.services import ExecutionEngine, PositionSizer, RiskConfig, RiskManager
+from upbit_bot.services.ollama_client import OllamaClient, OllamaError
 from upbit_bot.strategies import Candle, get_strategy
 from upbit_bot.utils import ConsoleNotifier, SlackNotifier, TelegramNotifier
 
@@ -273,6 +276,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     
     # 앱 시작 시 백그라운드 태스크 시작
     start_background_ai_analysis()
+
+    # CSP 헤더 미들웨어 추가
+    class CSPMiddleware(BaseHTTPMiddleware):
+        """Content Security Policy 헤더를 모든 응답에 추가"""
+        async def dispatch(self, request: Request, call_next):
+            response = await call_next(request)
+            # CSP 헤더 추가 (unsafe-eval 허용 - Tailwind CDN 및 동적 코드 실행 필요)
+            csp_policy = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+                "https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; "
+                "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
+                "connect-src 'self' ws: wss: http: https:; "
+                "img-src 'self' data: https:; "
+                "font-src 'self' data: https:; "
+                "frame-src 'none'; "
+                "object-src 'none';"
+            )
+            response.headers["Content-Security-Policy"] = csp_policy
+            return response
+
+    app.add_middleware(CSPMiddleware)
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:  # noqa: D401
@@ -594,13 +619,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 if test_response.status_code == 200:
                                     models = test_response.json().get("models", [])
                                     model_names = [m.get("name", "") for m in models]
-                                    if "qwen2.5-coder:7b" in model_names:
-                                        ollama_status = "connected"
-                                        LOGGER.info(f"Ollama 연결 확인: {len(models)}개 모델 사용 가능")
-                                    else:
-                                        ollama_status = "model_missing"
-                                        ollama_error = f"필요한 모델 'qwen2.5-coder:7b' 없음 (사용 가능: {', '.join(model_names[:3])}...)"
-                                        LOGGER.warning(ollama_error)
+                                    # 현재는 1.5b 단일 모델 구조를 사용하므로, 태그 조회만 성공하면 연결된 것으로 간주
+                                    ollama_status = "connected"
+                                    LOGGER.info(f"Ollama 연결 확인: {len(models)}개 모델 사용 가능 (모델 목록: {', '.join(model_names[:3])}...)")
                                 else:
                                     ollama_status = "error"
                                     ollama_error = f"HTTP {test_response.status_code}"
@@ -1012,6 +1033,107 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "message": str(e)
             })
 
+    @app.post("/api/ai/query")
+    async def ai_query(request: Request) -> JSONResponse:
+        """코인 관련 Q&A 엔드포인트."""
+        try:
+            payload = await request.json()
+            question = (payload.get("question") or "").strip()
+            if not question:
+                return JSONResponse(
+                    {"error": "question is required"},
+                    status_code=400,
+                )
+
+            # 코인/마켓 추출 (간단 규칙)
+            import re
+
+            market_pattern = re.compile(r"\b(KRW-[A-Z0-9]{2,10})\b")
+            markets = market_pattern.findall(question)
+            market = markets[0] if markets else None
+
+            # trade history / decisions / scan 결과 조회
+            trade_store: TradeHistoryStore = app.state.trade_history_store
+
+            # 최근 거래
+            recent_trades = []
+            try:
+                if market:
+                    recent_trades = trade_store.get_trades_by_market(market, limit=20)
+                else:
+                    recent_trades = trade_store.get_recent_trades(limit=20)
+            except Exception as e:
+                LOGGER.warning(f"AI Q&A: trade history 조회 실패: {e}")
+
+            # 최근 AI 결정/스캔 결과 (직접 SQL 사용)
+            decisions: list[dict[str, Any]] = []
+            scans: list[dict[str, Any]] = []
+            try:
+                conn = trade_store._conn  # 내부 커넥션 재사용
+                cur = conn.execute(
+                    """
+                    SELECT * FROM ai_decisions
+                    ORDER BY decided_at DESC
+                    LIMIT 20
+                    """
+                )
+                decisions = [dict(row) for row in cur.fetchall()]
+
+                cur = conn.execute(
+                    """
+                    SELECT * FROM coin_scan_results
+                    ORDER BY scanned_at DESC
+                    LIMIT 100
+                    """
+                )
+                scans = [dict(row) for row in cur.fetchall()]
+            except Exception as e:
+                LOGGER.warning(f"AI Q&A: ai_decisions/coin_scan_results 조회 실패: {e}")
+
+            # LLM 컨텍스트 구성
+            context = {
+                "question": question,
+                "market": market,
+                "recent_trades": recent_trades,
+                "ai_decisions": decisions,
+                "coin_scans": scans,
+            }
+
+            # Ollama 클라이언트 (경량 모델 사용)
+            ollama_client = OllamaClient()
+            prompt = (
+                "당신은 이 업비트 자동매매 봇의 기록을 설명해주는 어시스턴트입니다.\n"
+                "아래 JSON 데이터만 근거로, 사용자의 코인 관련 질문에 한국어로 답하세요.\n"
+                "모르는 정보는 \"기록 상 알 수 없습니다\"라고 답하고, 추측하거나 지어내지 마세요.\n\n"
+                "[질문]\n"
+                f"{question}\n\n"
+                "[트레이딩/AI 기록 데이터]\n"
+                f"{json.dumps(context, ensure_ascii=False)[:6000]}\n\n"
+                "위 데이터를 기반으로 간결하지만 충분한 설명을 해주세요."
+            )
+
+            try:
+                answer_text = ollama_client.generate(prompt, temperature=0.2)
+            except OllamaError as e:
+                LOGGER.error(f"AI Q&A Ollama 오류: {e}")
+                return JSONResponse(
+                    {"error": "Ollama 호출 실패", "details": str(e)},
+                    status_code=500,
+                )
+
+            return JSONResponse(
+                {
+                    "answer": answer_text.strip(),
+                    "market": market,
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            LOGGER.error(f"AI Q&A 처리 실패: {e}", exc_info=True)
+            return JSONResponse(
+                {"error": str(e)},
+                status_code=500,
+            )
+
     return app
 
 
@@ -1206,22 +1328,146 @@ def _render_dashboard(
         <!-- Header -->
         <div class="mb-10">
             <div class="flex items-center justify-between mb-6">
-    <div>
+                <div>
                     <h1 class="text-5xl font-extrabold bg-gradient-to-r from-blue-600 via-purple-600 to-blue-800 dark:from-blue-400 dark:via-purple-400 dark:to-blue-600 bg-clip-text text-transparent mb-2">
                         Upbit Trading Bot
                     </h1>
                     <p class="text-gray-600 dark:text-gray-400 text-sm">AI 기반 자동 매매 시스템</p>
-    </div>
-                <div class="flex items-center space-x-3">
-                    <div class="flex items-center px-5 py-2.5 rounded-xl bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700">
-                        <span class="status-indicator {running_status}"></span>
-                        <span class="text-sm font-bold text-gray-700 dark:text-gray-300">
-                            {state.running and "RUNNING" or "STOPPED"}
-                        </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Server Control & Account (상단으로 이동) -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Controls Card -->
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+                    <span class="text-3xl">🎮</span>
+                    <span>서버 제어</span>
+                </h2>
+                
+                <!-- 서버 상태 표시 -->
+                <div class="mb-6 p-5 rounded-xl bg-gradient-to-br from-blue-50 via-blue-100 to-indigo-50 dark:from-blue-900/30 dark:via-blue-800/20 dark:to-indigo-900/30 border-2 border-blue-200 dark:border-blue-800 shadow-md">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">서버 상태</p>
+                            <div class="flex items-center gap-3">
+                                <div class="w-4 h-4 rounded-full bg-green-500 animate-pulse shadow-lg shadow-green-500/50" id="server-status-dot"></div>
+                                <span class="text-xl font-extrabold text-gray-900 dark:text-white" id="server-status-text">🟢 동작 중</span>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">거래 모드</p>
+                            <span class="inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md {'bg-gradient-to-r from-blue-500 to-blue-600 text-white' if state.dry_run else 'bg-gradient-to-r from-orange-500 to-red-600 text-white'}" id="trading-mode-badge">{state.dry_run and '모의 모드' or '실전 모드'}</span>
+                        </div>
                     </div>
-                    <div class="px-5 py-2.5 rounded-xl shadow-lg font-bold text-sm {'bg-gradient-to-r from-blue-500 to-blue-600 text-white dark:from-blue-600 dark:to-blue-700' if state.dry_run else 'bg-gradient-to-r from-orange-500 to-red-600 text-white dark:from-orange-600 dark:to-red-700'}">
-                        {state.dry_run and "DRY-RUN" or "LIVE"}
+                </div>
+                
+                <div class="space-y-4">
+                    <form method="post" action="/start" class="space-y-3">
+                        <div>
+                            <label for="mode" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">📊 거래 모드 선택</label>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button type="button" id="mode-dry" class="w-full px-4 py-2 border-2 rounded-lg font-semibold transition-all {'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' if state.dry_run else 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:border-blue-400'}">
+                                    🟢 모의 모드
+                                </button>
+                                <button type="button" id="mode-live" class="w-full px-4 py-2 border-2 rounded-lg font-semibold transition-all {'border-red-500 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300' if not state.dry_run else 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:border-red-400'}">
+                                    🔴 실전 모드
+                                </button>
+                            </div>
+                            <input type="hidden" id="mode" name="mode" value="{'dry' if state.dry_run else 'live'}">
+                        </div>
+                        <button type="submit" class="btn-success w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span>서버 시작</span>
+                        </button>
+                    </form>
+                    <form method="post" action="/stop">
+                        <button type="submit" class="btn-danger w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"></path>
+                            </svg>
+                            <span>서버 중지</span>
+                        </button>
+                    </form>
+                    
+                    <!-- 강제 탈출 버튼 -->
+                    <button id="force-exit-btn" class="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 active:from-orange-700 active:to-red-800 text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                        </svg>
+                        <span>강제 탈출 (모든 코인 매도)</span>
+                    </button>
+                    
+                    <!-- 거래 내역 동기화 버튼 -->
+                    <button id="sync-trades-btn" class="w-full bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 active:from-blue-700 active:to-indigo-800 text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                        <span>거래 내역 동기화</span>
+                    </button>
+                    
+                    <!-- 추가 정보 -->
+                    <div class="grid grid-cols-2 gap-2 pt-4 border-t border-gray-200 dark:border-gray-700 text-xs">
+                        <div>
+                            <p class="text-gray-600 dark:text-gray-400">마지막 실행</p>
+                            <p class="font-semibold text-gray-900 dark:text-white" id="last-run-time">-</p>
+                        </div>
+                        <div>
+                            <p class="text-gray-600 dark:text-gray-400">마지막 신호</p>
+                            <p class="font-semibold text-gray-900 dark:text-white" id="last-signal-badge">HOLD</p>
+                        </div>
                     </div>
+                </div>
+            </div>
+            
+            <!-- Account Snapshot -->
+            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
+                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+                    <span class="text-3xl">💼</span>
+                    <span>자산 현황</span>
+                </h2>
+                {f'''
+                <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                    <div class="flex items-start">
+                        <svg class="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <p class="text-sm font-semibold text-red-600 dark:text-red-400 mb-1">인증 오류</p>
+                            <p class="text-xs text-red-600 dark:text-red-400">
+                                {'API 키가 유효하지 않습니다. .env 파일의 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 확인해주세요.' if '401' in str(account_error) or 'invalid_access_key' in str(account_error) else str(account_error)}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                ''' if account_error else ''}
+                <div class="overflow-x-auto">
+                    <table id="account-snapshot" class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b-2 border-gray-300 dark:border-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800">
+                                <th class="text-left py-4 px-4 font-bold text-gray-800 dark:text-gray-200">코인</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">보유량</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">구매금액 (원)</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가치 (원)</th>
+                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">수익/손실 (원)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {''.join([f'''
+                            <tr class="table-row border-b border-gray-100 dark:border-gray-700 transition-all duration-200">
+                                <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')}</td>
+                                <td class="py-3 px-4 text-right text-gray-900 dark:text-white">{float(entry.get('balance', 0)):,.8f}</td>
+                                <td class="py-3 px-4 text-right font-medium text-blue-600 dark:text-blue-400">{f"{float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('purchase_amount') else '-'}</td>
+                                <td class="py-3 px-4 text-right font-medium text-green-600 dark:text-green-400">{f"{float(entry.get('crypto_value', 0)):,.0f}" if entry.get('crypto_value') else '-'}</td>
+                                <td class="py-3 px-4 text-right font-medium {('text-green-600 dark:text-green-400' if float(entry.get('crypto_value', 0)) - float(entry.get('purchase_amount', 0)) >= 0 else 'text-red-600 dark:text-red-400')}">{f"{float(entry.get('crypto_value', 0)) - float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('crypto_value') and entry.get('purchase_amount') else '-'}</td>
+                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="5" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">거래 가능한 코인이 없습니다</td></tr>'}
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -1266,7 +1512,7 @@ def _render_dashboard(
         </div>
 
         <!-- AI Analysis Console Window (Always Visible - Scrollable) -->
-        <div class="mb-6 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 dark:from-gray-950 dark:via-gray-900 dark:to-black rounded-2xl shadow-2xl border border-gray-700 dark:border-gray-800 overflow-hidden">
+        <div class="mb-8 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 dark:from-gray-950 dark:via-gray-900 dark:to-black rounded-2xl shadow-2xl border border-gray-700 dark:border-gray-800 overflow-hidden">
             <div class="bg-gradient-to-r from-gray-800 to-gray-900 dark:from-gray-900 dark:to-gray-800 px-5 py-4 border-b border-gray-700 dark:border-gray-800 flex items-center justify-between">
                 <div class="flex items-center gap-4">
                     <h3 class="text-base font-bold text-green-400 flex items-center gap-3">
@@ -1283,7 +1529,7 @@ def _render_dashboard(
                     Clear
                 </button>
             </div>
-            <div id="ai-console-content" class="overflow-y-auto p-5 font-mono text-sm text-green-400 bg-gray-900 dark:bg-black" style="height: 20em; line-height: 1.5em; max-height: 20em;">
+            <div id="ai-console-content" class="overflow-y-auto p-5 font-mono text-sm text-green-400 bg-gray-900 dark:bg-black" style="height: 24em; line-height: 1.5em; max-height: 24em;">
                 <div id="ai-console-waiting" class="text-gray-500 flex items-center gap-2">
                     <span class="animate-spin">🔄</span>
                     <span>AI 분석 대기 중...</span>
@@ -1292,7 +1538,7 @@ def _render_dashboard(
         </div>
 
         <!-- Balance Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
             <div class="balance-card card rounded-2xl shadow-xl p-7 relative overflow-hidden">
                 <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-green-400/20 to-green-600/10 rounded-full -mr-16 -mt-16"></div>
                 <div class="flex items-center justify-between relative z-10">
@@ -1405,6 +1651,26 @@ def _render_dashboard(
                             </div>
                         </div>
                     </div>
+
+            <!-- AI Q&A Search Bar -->
+            <div class="mt-4">
+                <div class="bg-white dark:bg-gray-800 shadow-lg rounded-2xl border border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center gap-3">
+                    <span class="text-xl">🔍</span>
+                    <input
+                        id="ai-query-input"
+                        type="text"
+                        class="flex-1 bg-transparent border-none focus:outline-none text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                        placeholder="코인 질문을 입력하세요 (예: 왜 KRW-BTC를 그때 그 가격에 샀어?, 지금 공격적으로 들어갈 코인은?)"
+                    />
+                    <button
+                        id="ai-query-button"
+                        class="px-3 py-1.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-md hover:shadow-lg transition-all"
+                        type="button"
+                    >
+                        질문하기
+                    </button>
+                </div>
+                <div id="ai-query-result" class="mt-3 text-sm text-gray-800 dark:text-gray-100 whitespace-pre-line hidden"></div>
                 </div>
             </div>
 
@@ -1414,19 +1680,19 @@ def _render_dashboard(
                     <span class="text-3xl">📋</span>
                     <span>거래 내역</span>
                 </h2>
-                <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 18em;">
-                    <table class="w-full text-xs">
+                <div id="trade-history" class="overflow-x-auto overflow-y-auto" style="height: 20em;">
+                    <table class="w-full text-sm">
                         <thead>
                             <tr class="border-b-2 border-gray-300 dark:border-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800">
-                                <th class="text-left py-3 px-3 font-bold text-gray-800 dark:text-gray-200">시간</th>
-                                <th class="text-left py-3 px-3 font-bold text-gray-800 dark:text-gray-200">코인</th>
-                                <th class="text-left py-3 px-3 font-bold text-gray-800 dark:text-gray-200">전략</th>
-                                <th class="text-center py-3 px-3 font-bold text-gray-800 dark:text-gray-200">신호</th>
-                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">가격</th>
-                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">수량</th>
-                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">총액</th>
-                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">수익/손실</th>
-                                <th class="text-right py-3 px-3 font-bold text-gray-800 dark:text-gray-200">수익률 (%)</th>
+                                <th class="text-left py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">시간</th>
+                                <th class="text-left py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">코인</th>
+                                <th class="text-left py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">전략</th>
+                                <th class="text-center py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">신호</th>
+                                <th class="text-right py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">가격</th>
+                                <th class="text-right py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">수량</th>
+                                <th class="text-right py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">총액</th>
+                                <th class="text-right py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">수익/손실</th>
+                                <th class="text-right py-3 px-4 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap">수익률 (%)</th>
                             </tr>
                         </thead>
                         <tbody id="trade-history-body">
@@ -1438,149 +1704,17 @@ def _render_dashboard(
         </div>
 
         <!-- Server Control & Account -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Controls Card -->
-            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
-                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                    <span class="text-3xl">🎮</span>
-                    <span>서버 제어</span>
-                </h2>
-                
-                <!-- 서버 상태 표시 -->
-                <div class="mb-6 p-5 rounded-xl bg-gradient-to-br from-blue-50 via-blue-100 to-indigo-50 dark:from-blue-900/30 dark:via-blue-800/20 dark:to-indigo-900/30 border-2 border-blue-200 dark:border-blue-800 shadow-md">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">서버 상태</p>
-                            <div class="flex items-center gap-3">
-                                <div class="w-4 h-4 rounded-full bg-green-500 animate-pulse shadow-lg shadow-green-500/50" id="server-status-dot"></div>
-                                <span class="text-xl font-extrabold text-gray-900 dark:text-white" id="server-status-text">Running</span>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wide">거래 모드</p>
-                            <span class="inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md {'bg-gradient-to-r from-blue-500 to-blue-600 text-white' if state.dry_run else 'bg-gradient-to-r from-orange-500 to-red-600 text-white'}" id="trading-mode-badge">{state.dry_run and 'Dry-run' or 'LIVE'}</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="space-y-4">
-                    <form method="post" action="/start" class="space-y-3">
-                        <div>
-                            <label for="mode" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">📊 거래 모드 선택</label>
-                            <div class="grid grid-cols-2 gap-2">
-                                <button type="button" id="mode-dry" class="w-full px-4 py-2 border-2 rounded-lg font-semibold transition-all {'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' if state.dry_run else 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:border-blue-400'}">
-                                    🟢 Dry-run
-                                </button>
-                                <button type="button" id="mode-live" class="w-full px-4 py-2 border-2 rounded-lg font-semibold transition-all {'border-red-500 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300' if not state.dry_run else 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:border-red-400'}">
-                                    🔴 Live
-                                </button>
-                            </div>
-                            <input type="hidden" id="mode" name="mode" value="{'dry' if state.dry_run else 'live'}">
-                        </div>
-                        <button type="submit" class="btn-success w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            <span>서버 시작</span>
-                        </button>
-            </form>
-            <form method="post" action="/stop">
-                        <button type="submit" class="btn-danger w-full text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"></path>
-                            </svg>
-                            <span>서버 중지</span>
-                        </button>
-            </form>
-            
-            <!-- 강제 탈출 버튼 -->
-            <button id="force-exit-btn" class="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 active:from-orange-700 active:to-red-800 text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
-                </svg>
-                <span>강제 탈출 (모든 코인 매도)</span>
-            </button>
-            
-            <!-- 거래 내역 동기화 버튼 -->
-            <button id="sync-trades-btn" class="w-full bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 active:from-blue-700 active:to-indigo-800 text-white font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                </svg>
-                <span>거래 내역 동기화</span>
-            </button>
-                    
-                    <!-- 추가 정보 -->
-                    <div class="grid grid-cols-2 gap-2 pt-4 border-t border-gray-200 dark:border-gray-700 text-xs">
-                        <div>
-                            <p class="text-gray-600 dark:text-gray-400">마지막 실행</p>
-                            <p class="font-semibold text-gray-900 dark:text-white" id="last-run-time">-</p>
-                        </div>
-                        <div>
-                            <p class="text-gray-600 dark:text-gray-400">마지막 신호</p>
-                            <p class="font-semibold text-gray-900 dark:text-white" id="last-signal-badge">HOLD</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Account Snapshot -->
-            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
-                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                    <span class="text-3xl">💼</span>
-                    <span>자산 현황</span>
-                </h2>
-                {f'''
-                <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                    <div class="flex items-start">
-                        <svg class="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                        <div>
-                            <p class="text-sm font-semibold text-red-600 dark:text-red-400 mb-1">인증 오류</p>
-                            <p class="text-xs text-red-600 dark:text-red-400">
-                                {'API 키가 유효하지 않습니다. .env 파일의 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 확인해주세요.' if '401' in str(account_error) or 'invalid_access_key' in str(account_error) else str(account_error)}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                ''' if account_error else ''}
-                <div class="overflow-x-auto">
-                    <table id="account-snapshot" class="w-full text-sm">
-                <thead>
-                            <tr class="border-b-2 border-gray-300 dark:border-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800">
-                                <th class="text-left py-4 px-4 font-bold text-gray-800 dark:text-gray-200">코인</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">보유량</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">구매금액 (원)</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">현재가치 (원)</th>
-                                <th class="text-right py-4 px-4 font-bold text-gray-800 dark:text-gray-200">수익/손실 (원)</th>
-                            </tr>
-                </thead>
-                <tbody>
-                            {''.join([f'''
-                            <tr class="table-row border-b border-gray-100 dark:border-gray-700 transition-all duration-200">
-                                <td class="py-3 px-4 font-medium text-gray-900 dark:text-white">{entry.get('currency', '?')}</td>
-                                <td class="py-3 px-4 text-right text-gray-900 dark:text-white">{float(entry.get('balance', 0)):,.8f}</td>
-                                <td class="py-3 px-4 text-right font-medium text-blue-600 dark:text-blue-400">{f"{float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('purchase_amount') else '-'}</td>
-                                <td class="py-3 px-4 text-right font-medium text-green-600 dark:text-green-400">{f"{float(entry.get('crypto_value', 0)):,.0f}" if entry.get('crypto_value') else '-'}</td>
-                                <td class="py-3 px-4 text-right font-medium {('text-green-600 dark:text-green-400' if float(entry.get('crypto_value', 0)) - float(entry.get('purchase_amount', 0)) >= 0 else 'text-red-600 dark:text-red-400')}">{f"{float(entry.get('crypto_value', 0)) - float(entry.get('purchase_amount', 0)):,.0f}" if entry.get('crypto_value') and entry.get('purchase_amount') else '-'}</td>
-                            </tr>''' for entry in accounts_data]) if accounts_data else '<tr><td colspan="5" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">거래 가능한 코인이 없습니다</td></tr>'}
-                </tbody>
-            </table>
-    </div>
-            </div>
-        </div>
+        <!-- (헤더 바로 아래로 이동된 섹션 - 중복 방지를 위해 이 위치에서는 제거됨) -->
 
-        <!-- Settings & Status (드롭다운 - 맨 아래) -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Settings Card -->
+        <!-- Settings & Status (드롭다운 - 맨 아래, 통합 카드) -->
+        <div class="grid grid-cols-1 gap-6 mb-8">
+            <!-- Settings + Status Card -->
             <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
                 <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                        <span class="text-3xl">⚙️</span>
-                        <span>설정</span>
-                    </h2>
-                <form id="settings-form" method="post" action="/update-settings" class="space-y-4">
+                    <span class="text-3xl">⚙️</span>
+                    <span>설정 & 상태</span>
+                </h2>
+                <form id="settings-form" method="post" action="/update-settings" class="space-y-6">
                     <div>
                         <label for="strategy-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             Strategy
@@ -1646,44 +1780,42 @@ def _render_dashboard(
                             • 매도: 신호 발생 시 무조건 매도 (포지션 &lt; 5,000원이면 추가 매수 후 즉시 판매) (기본값: 3%)
                         </p>
                     </div>
-                    <button 
-                        type="submit" 
-                        class="btn-primary w-full text-white font-bold py-3 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl"
-                    >
-                        설정 저장
-                    </button>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-gray-200 dark:border-gray-700 text-sm">
+                        <div class="space-y-3">
+                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                                <span class="text-gray-600 dark:text-gray-400">Current Market</span>
+                                <span class="font-semibold text-gray-900 dark:text-white">{state.market}</span>
+                            </div>
+                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                                <span class="text-gray-600 dark:text-gray-400">Current Strategy</span>
+                                <span class="font-semibold text-gray-900 dark:text-white">{state.strategy}</span>
+                            </div>
+                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                                <span class="text-gray-600 dark:text-gray-400">💰 Order Size</span>
+                                <span class="font-semibold text-gray-900 dark:text-white">{settings.order_amount_pct}%</span>
+                            </div>
+                        </div>
+                        <div class="space-y-3">
+                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                                <span class="text-gray-600 dark:text-gray-400">Last Signal</span>
+                                <span class="font-semibold text-gray-900 dark:text-white">{state.last_signal or "N/A"}</span>
+                            </div>
+                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                                <span class="text-gray-600 dark:text-gray-400">Last Run</span>
+                                <span class="font-semibold text-gray-900 dark:text-white text-sm">{state.last_run_at or "N/A"}</span>
+                            </div>
+                            {f'<div class="flex justify-between items-center py-2"><span class="text-red-600 dark:text-red-400">Last Error</span><span class="font-semibold text-red-600 dark:text-red-400 text-sm">{state.last_error}</span></div>' if state.last_error else ''}
+                        </div>
+                    </div>
+                    <div class="mt-6">
+                        <button 
+                            type="submit" 
+                            class="btn-primary w-full text-white font-bold py-3 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl"
+                        >
+                            설정 저장
+                        </button>
+                    </div>
                 </form>
-            </div>
-            
-            <!-- Status Card -->
-            <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
-                <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                        <span class="text-3xl">📊</span>
-                        <span>상태</span>
-                    </h2>
-                <div class="space-y-3">
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Current Market</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{state.market}</span>
-                    </div>
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Current Strategy</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{state.strategy}</span>
-                    </div>
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">💰 Order Size</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{settings.order_amount_pct}%</span>
-                    </div>
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Last Signal</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{state.last_signal or "N/A"}</span>
-                    </div>
-                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-gray-600 dark:text-gray-400">Last Run</span>
-                        <span class="font-semibold text-gray-900 dark:text-white text-sm">{state.last_run_at or "N/A"}</span>
-                    </div>
-                    {f'<div class="flex justify-between items-center py-2"><span class="text-red-600 dark:text-red-400">Last Error</span><span class="font-semibold text-red-600 dark:text-red-400 text-sm">{state.last_error}</span></div>' if state.last_error else ''}
-                </div>
             </div>
         </div>
 
@@ -1701,6 +1833,62 @@ def _render_dashboard(
         }};
         let currentChartInstance = null;
         let eventSource = null;
+
+        // AI Q&A 검색창 핸들러
+        async function sendAiQuery() {{
+            const input = document.getElementById('ai-query-input');
+            const resultEl = document.getElementById('ai-query-result');
+            if (!input || !resultEl) return;
+
+            const question = input.value.trim();
+            if (!question) {{
+                resultEl.textContent = '질문을 입력해주세요.';
+                resultEl.classList.remove('hidden');
+                return;
+            }}
+
+            resultEl.textContent = 'AI가 기록을 분석하는 중입니다...';
+            resultEl.classList.remove('hidden');
+
+            try {{
+                const resp = await fetch('/api/ai/query', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                    }},
+                    body: JSON.stringify({{ "question": question }}),
+                }});
+
+                const data = await resp.json();
+                if (!resp.ok) {{
+                    resultEl.textContent = data.error || '요청 처리 중 오류가 발생했습니다.';
+                    return;
+                }}
+
+                resultEl.textContent = data.answer || '응답을 생성하지 못했습니다.';
+            }} catch (err) {{
+                console.error('AI Q&A 요청 실패:', err);
+                resultEl.textContent = '서버와 통신 중 오류가 발생했습니다.';
+            }}
+        }}
+
+        function initAiQuery() {{
+            const input = document.getElementById('ai-query-input');
+            const button = document.getElementById('ai-query-button');
+            if (button) {{
+                button.addEventListener('click', sendAiQuery);
+            }}
+            if (input) {{
+                input.addEventListener('keydown', function(e) {{
+                    if (e.key === 'Enter') {{
+                        e.preventDefault();
+                        sendAiQuery();
+                    }}
+                }});
+            }}
+        }}
+
+        document.addEventListener('DOMContentLoaded', initAiQuery);
         
         // SSE 스트림 연결
         function connectEventStream() {{
@@ -1751,30 +1939,25 @@ def _render_dashboard(
                         if (data.ollama_status && typeof data.ollama_status === 'object') {{
                             const connected = data.ollama_status.connected === true;
                             const error = data.ollama_status.error || null;
-                            const scannerModel = data.ollama_status.scanner_model || 'N/A';
-                            const decisionModel = data.ollama_status.decision_model || 'N/A';
                             const scannerAvailable = data.ollama_status.scanner_model_available === true;
                             const decisionAvailable = data.ollama_status.decision_model_available === true;
                             const modelAvailable = data.ollama_status.model_available === true;
                             
                             if (connected && modelAvailable) {{
-                                // 연결됨 + 두 모델 모두 사용 가능
+                                // 연결됨 + 두 모델 모두 사용 가능 (모델 이름은 표시하지 않음)
                                 statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-900/30 text-green-400 border border-green-600/50';
                                 statusIcon.className = 'w-2 h-2 rounded-full bg-green-400 animate-pulse';
-                                statusText.textContent = '✅ Ollama 연결됨 (1.5b + 7b)';
+                                statusText.textContent = '✅ Ollama 연결됨';
                             }} else if (connected && (scannerAvailable || decisionAvailable)) {{
-                                // 연결됨 + 일부 모델만 사용 가능
-                                const missingModels = [];
-                                if (!scannerAvailable) missingModels.push('1.5b');
-                                if (!decisionAvailable) missingModels.push('7b');
+                                // 연결됨 + 일부 모델만 사용 가능 (모델 이름 없이 요약만 표시)
                                 statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-900/30 text-yellow-400 border border-yellow-600/50';
                                 statusIcon.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
-                                statusText.textContent = '⚠️ Ollama 연결됨 (모델 ' + missingModels.join(', ') + ' 없음)';
+                                statusText.textContent = '⚠️ Ollama 연결됨 (일부 모델 없음)';
                             }} else if (connected && !scannerAvailable && !decisionAvailable) {{
-                                // 연결됨 + 모델 없음
+                                // 연결됨 + 모델 없음 (모델 이름 미표시)
                                 statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-900/30 text-yellow-400 border border-yellow-600/50';
                                 statusIcon.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
-                                statusText.textContent = '⚠️ Ollama 연결됨 (모델 없음: ' + scannerModel + ', ' + decisionModel + ')';
+                                statusText.textContent = '⚠️ Ollama 연결됨 (사용 가능한 모델 없음)';
                             }} else {{
                                 // 연결 안됨
                                 statusBadge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-900/30 text-red-400 border border-red-600/50';
@@ -1846,13 +2029,13 @@ def _render_dashboard(
                         if (isRunning) {{
                             statusDot.classList.add('bg-green-500', 'animate-pulse');
                             statusDot.classList.remove('bg-red-500');
-                            statusText.textContent = '🟢 Running';
+                            statusText.textContent = '🟢 동작 중';
                             statusText.classList.add('text-green-600', 'dark:text-green-400');
                             statusText.classList.remove('text-red-600', 'dark:text-red-400');
                         }} else {{
                             statusDot.classList.remove('bg-green-500', 'animate-pulse');
                             statusDot.classList.add('bg-red-500');
-                            statusText.textContent = '🔴 Stopped';
+                            statusText.textContent = '🔴 중지됨';
                             statusText.classList.remove('text-green-600', 'dark:text-green-400');
                             statusText.classList.add('text-red-600', 'dark:text-red-400');
                         }}
@@ -1956,9 +2139,7 @@ def _render_dashboard(
                                         errorMsg += ': ' + analysis.ollama_error;
                                     }}
                                     if (analysis.ollama_status === 'disconnected' || analysis.ollama_status === 'timeout') {{
-                                        errorMsg += ' (IP: 100.98.189.30:11434) - 노트북에서 "ollama serve" 실행 필요';
-                                    }} else if (analysis.ollama_status === 'model_missing') {{
-                                        errorMsg += ' - 노트북에서 "ollama pull qwen2.5-coder:7b" 실행 필요';
+                                        errorMsg += ' (IP: 100.98.189.30:11434) - Ollama 서버 상태를 확인해주세요.';
                                     }}
                                     const message = '[' + timestamp + '] ' + coinName + ' | ' + errorMsg;
                                     addAIConsoleMessage(message, 'red');
@@ -2809,10 +2990,10 @@ def _render_dashboard(
             const modeBadge = document.getElementById('trading-mode-badge');
             if (modeBadge) {{
                 if (isDryRun) {{
-                    modeBadge.textContent = '🟢 Dry-run (시뮬레이션)';
+                    modeBadge.textContent = '🟢 모의 모드 (시뮬레이션)';
                     modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-blue-500 to-blue-600 text-white';
                 }} else {{
-                    modeBadge.textContent = '🔴 Live (실제 거래)';
+                    modeBadge.textContent = '🔴 실전 모드 (실제 거래)';
                     modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-orange-500 to-red-600 text-white';
                 }}
             }}
@@ -2860,7 +3041,7 @@ def _render_dashboard(
                     const isDryRun = result.updates?.dry_run === true || 
                                      (result.updates?.dry_run === undefined && mode === 'dry') ||
                                      (result.updates?.mode === 'dry');
-                    console.log('거래 모드 배지 업데이트:', isDryRun ? 'Dry-run' : 'Live', '(dry_run:', result.updates?.dry_run, ', mode:', mode, ')');
+                    console.log('거래 모드 배지 업데이트:', isDryRun ? '모의 모드' : '실전 모드', '(dry_run:', result.updates?.dry_run, ', mode:', mode, ')');
                     updateTradingModeBadge(isDryRun);
                 }} else {{
                     console.error('거래 모드 변경 실패:', result.error);
@@ -3002,13 +3183,13 @@ def _render_dashboard(
                         if (isRunning) {{
                             statusDot.classList.add('bg-green-500', 'animate-pulse');
                             statusDot.classList.remove('bg-red-500');
-                            statusText.textContent = '🟢 Running';
+                            statusText.textContent = '🟢 동작 중';
                             statusText.classList.add('text-green-600', 'dark:text-green-400');
                             statusText.classList.remove('text-red-600', 'dark:text-red-400');
                         }} else {{
                             statusDot.classList.remove('bg-green-500', 'animate-pulse');
                             statusDot.classList.add('bg-red-500');
-                            statusText.textContent = '🔴 Stopped';
+                            statusText.textContent = '🔴 중지됨';
                             statusText.classList.remove('text-green-600', 'dark:text-green-400');
                             statusText.classList.add('text-red-600', 'dark:text-red-400');
                         }}
@@ -3018,10 +3199,10 @@ def _render_dashboard(
                     if (modeBadge) {{
                         const isDryRun = data.dry_run === true;
                         if (isDryRun) {{
-                            modeBadge.textContent = '🟢 Dry-run (시뮬레이션)';
+                            modeBadge.textContent = '🟢 모의 모드 (시뮬레이션)';
                             modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-blue-500 to-blue-600 text-white';
                         }} else {{
-                            modeBadge.textContent = '🔴 Live (실제 거래)';
+                            modeBadge.textContent = '🔴 실전 모드 (실제 거래)';
                             modeBadge.className = 'inline-block px-4 py-1.5 rounded-xl text-sm font-bold shadow-md bg-gradient-to-r from-orange-500 to-red-600 text-white';
                         }}
                     }}

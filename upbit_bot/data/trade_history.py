@@ -66,9 +66,157 @@ class TradeHistoryStore:
         CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market);
         CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
         CREATE INDEX IF NOT EXISTS idx_positions_market ON positions(market);
+
+        -- AI 스캐너 결과 (코인별 점수/지표 기록)
+        CREATE TABLE IF NOT EXISTS coin_scan_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id TEXT NOT NULL,
+            scanned_at TEXT NOT NULL,
+            market TEXT NOT NULL,
+            score REAL NOT NULL,
+            risk TEXT NOT NULL,
+            trend TEXT,
+            reason TEXT,
+            current_price REAL,
+            ma_5 REAL,
+            ma_10 REAL,
+            ma_20 REAL,
+            volatility REAL,
+            recent_change REAL,
+            volume_ratio REAL,
+            volume_24h REAL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_coin_scan_results_scan_id
+            ON coin_scan_results (scan_id);
+
+        CREATE INDEX IF NOT EXISTS idx_coin_scan_results_market_time
+            ON coin_scan_results (market, scanned_at);
+
+        -- AI 결정 로그 (매수/매도/HOLD 판단 기록)
+        CREATE TABLE IF NOT EXISTS ai_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            decision_id TEXT NOT NULL,
+            scan_id TEXT,
+            decided_at TEXT NOT NULL,
+            signal TEXT NOT NULL,
+            market TEXT,
+            confidence REAL,
+            risk_level TEXT,
+            reason TEXT,
+            total_positions INTEGER,
+            max_positions INTEGER,
+            krw_balance REAL,
+            total_balance REAL,
+            candidates_json TEXT,
+            alternatives_json TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_decisions_time
+            ON ai_decisions (decided_at);
+
+        CREATE INDEX IF NOT EXISTS idx_ai_decisions_scan
+            ON ai_decisions (scan_id);
         """
         with self._conn:
             self._conn.executescript(schema)
+
+    # --- AI 스캐너/결정 결과 저장 유틸리티 ---
+
+    def log_coin_scan_results(
+        self,
+        scan_id: str,
+        scanned_at: str,
+        coin_analyses: dict[str, dict[str, Any]],
+    ) -> None:
+        """여러 코인 스캔 결과를 coin_scan_results 테이블에 저장."""
+        if not coin_analyses:
+            return
+
+        rows = []
+        for market, analysis in coin_analyses.items():
+            indicators = analysis.get("indicators", {}) or {}
+            rows.append(
+                (
+                    scan_id,
+                    scanned_at,
+                    market,
+                    float(analysis.get("score", 0.0)),
+                    str(analysis.get("risk", "medium")),
+                    analysis.get("trend"),
+                    analysis.get("reason"),
+                    indicators.get("current_price"),
+                    indicators.get("ma_5"),
+                    indicators.get("ma_10"),
+                    indicators.get("ma_20"),
+                    indicators.get("volatility"),
+                    indicators.get("recent_change"),
+                    indicators.get("volume_ratio"),
+                    analysis.get("volume_24h"),
+                )
+            )
+
+        with self._conn:
+            self._conn.executemany(
+                """
+                INSERT INTO coin_scan_results (
+                    scan_id, scanned_at, market, score, risk, trend, reason,
+                    current_price, ma_5, ma_10, ma_20,
+                    volatility, recent_change, volume_ratio, volume_24h
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def log_ai_decision(
+        self,
+        decision_id: str,
+        scan_id: str | None,
+        decided_at: str,
+        signal: str,
+        market: str | None,
+        confidence: float | None,
+        risk_level: str | None,
+        reason: str | None,
+        total_positions: int | None,
+        max_positions: int | None,
+        krw_balance: float | None,
+        total_balance: float | None,
+        candidates: list[dict[str, Any]] | None = None,
+        alternatives: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """AI 매매 결정 결과를 ai_decisions 테이블에 저장."""
+        decided_at_ts = decided_at or datetime.now(UTC).isoformat()
+        with self._conn:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO ai_decisions (
+                    decision_id, scan_id, decided_at,
+                    signal, market, confidence, risk_level, reason,
+                    total_positions, max_positions, krw_balance, total_balance,
+                    candidates_json, alternatives_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision_id,
+                    scan_id,
+                    decided_at_ts,
+                    signal,
+                    market,
+                    confidence,
+                    risk_level,
+                    reason,
+                    total_positions,
+                    max_positions,
+                    krw_balance,
+                    total_balance,
+                    json.dumps(candidates or []),
+                    json.dumps(alternatives or []),
+                ),
+            )
+            return cursor.lastrowid
 
     def save_trade(
         self,

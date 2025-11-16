@@ -76,9 +76,9 @@ class TradingController:
         LOGGER = logging.getLogger(__name__)
         
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://100.98.189.30:11434")
-        # 두 개의 모델 확인: 스캐너(1.5b)와 결정자(7b)
+        # 단일 모델 구조 (현재는 1.5b 동일 모델 사용)
         scanner_model = os.getenv("OLLAMA_SCANNER_MODEL", "qwen2.5:1.5b")
-        decision_model = os.getenv("OLLAMA_DECISION_MODEL", "qwen2.5-coder:7b")
+        decision_model = os.getenv("OLLAMA_DECISION_MODEL", "qwen2.5:1.5b")
         
         status = {
             "connected": False,
@@ -134,7 +134,7 @@ class TradingController:
                             status["model"] = name
                         break
                 
-                # 두 모델 모두 사용 가능한지 확인
+                # 두 모델 모두 사용 가능한지 확인 (현재는 동일 모델이므로 하나만 있어도 OK)
                 status["model_available"] = scanner_found and decision_found
                 
                 if not scanner_found:

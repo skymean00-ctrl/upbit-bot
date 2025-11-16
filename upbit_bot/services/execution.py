@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from threading import Event, Thread
@@ -704,9 +705,9 @@ class ExecutionEngine:
                     remote_scanner_url=remote_scanner_url,
                 )
             
-            # 거래량 상위 100개 코인 가져오기 (하이브리드 방식: 상위 100개만 스캔)
-            markets = self.client.get_top_volume_markets(limit=100)
-            LOGGER.info(f"거래량 상위 100개 코인 선택: {len(markets)}개")
+            # 거래량 상위 30개 코인 가져오기 (하이브리드 방식: 상위 30개만 스캔)
+            markets = self.client.get_top_volume_markets(limit=30)
+            LOGGER.info(f"거래량 상위 30개 코인 선택: {len(markets)}개")
             
             # 이미 포지션이 있는 코인은 제외
             portfolio = self.get_portfolio_status()
@@ -768,11 +769,11 @@ class ExecutionEngine:
             def get_markets_data() -> dict[str, list[Candle]]:
                 """markets_data를 반환하는 콜백 함수"""
                 try:
-                    # 거래량 상위 100개 코인 가져오기
-                    top_markets = self.client.get_top_volume_markets(limit=100)
+                    # 거래량 상위 30개 코인 가져오기
+                    top_markets = self.client.get_top_volume_markets(limit=30)
                     markets_data_result: dict[str, list[Candle]] = {}
                     
-                    for market in top_markets[:100]:  # 최대 100개만
+                    for market in top_markets[:30]:  # 최대 30개만
                         try:
                             raw = self.client.get_candles(market, unit=self.candle_unit, count=min(self.candle_count, 20))
                             if not raw:
@@ -819,6 +820,65 @@ class ExecutionEngine:
                 current_portfolio=portfolio,
                 market_context=market_context,
             )
+
+            # AI 스캐너/결정 결과를 DB에 기록 (가능한 경우)
+            try:
+                if self.trade_history_store:
+                    # 공통 ID 생성
+                    scan_id = analysis_data.get("scan_id") or str(uuid.uuid4())
+                    decision_id = analysis_data.get("decision", {}).get("decision_id") or str(
+                        uuid.uuid4()
+                    )
+                    now_ts = datetime.now(UTC).isoformat()
+
+                    # 1) 코인 스캔 결과 저장 (가능한 경우)
+                    coin_analyses = analysis_data.get("coin_analyses") or analysis_data.get(
+                        "scan_results"
+                    )
+                    if isinstance(coin_analyses, dict) and coin_analyses:
+                        self.trade_history_store.log_coin_scan_results(
+                            scan_id=scan_id,
+                            scanned_at=now_ts,
+                            coin_analyses=coin_analyses,
+                        )
+
+                    # 2) 매매 결정 결과 저장
+                    decision = analysis_data.get("decision") or {}
+                    signal_str = decision.get("signal") or signal.value if signal else "HOLD"
+                    decision_market = decision.get("market") or selected_market
+                    risk_info = decision.get("risk") or decision.get("risk_assessment") or {}
+                    risk_level = (
+                        risk_info.get("level")
+                        if isinstance(risk_info, dict)
+                        else risk_info or None
+                    )
+                    reason = decision.get("reason")
+                    candidates = decision.get("candidates") or decision.get(
+                        "alternative_options"
+                    )
+
+                    self.trade_history_store.log_ai_decision(
+                        decision_id=decision_id,
+                        scan_id=scan_id,
+                        decided_at=now_ts,
+                        signal=signal_str,
+                        market=decision_market,
+                        confidence=decision.get("confidence", confidence),
+                        risk_level=risk_level,
+                        reason=reason,
+                        total_positions=portfolio.get("total_positions"),
+                        max_positions=market_context.get("max_positions"),
+                        krw_balance=market_context.get("krw_balance"),
+                        total_balance=market_context.get("total_balance"),
+                        candidates=candidates if isinstance(candidates, list) else [],
+                        alternatives=decision.get("alternatives")
+                        if isinstance(decision.get("alternatives"), list)
+                        else decision.get("alternative_options")
+                        if isinstance(decision.get("alternative_options"), list)
+                        else [],
+                    )
+            except Exception as db_exc:  # noqa: BLE001
+                LOGGER.warning(f"AI 기록 저장 중 오류 발생: {db_exc}")
             
             # 분석 결과 저장
             if hasattr(self.strategy, 'last_analysis'):

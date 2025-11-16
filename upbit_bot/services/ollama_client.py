@@ -11,12 +11,13 @@ import requests
 
 LOGGER = logging.getLogger(__name__)
 
-# Ollama 설정
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://100.98.189.30:11434")
+# Ollama 설정 (서버 단일 환경 기준)
+# 기본적으로 로컬 서버에서 qwen2.5 1.5B 모델을 스캐너/결정자 모두에 사용합니다.
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 # Ollama 1: 스캐너 모델 (1.5b - 정보 수집용, 빠른 스캔)
 OLLAMA_SCANNER_MODEL = os.getenv("OLLAMA_SCANNER_MODEL", "qwen2.5:1.5b")
-# Ollama 2: 결정자 모델 (7b - 분석 및 판단용, 정확한 결정)
-OLLAMA_DECISION_MODEL = os.getenv("OLLAMA_DECISION_MODEL", "qwen2.5-coder:7b")
+# Ollama 2: 결정자 모델 (1.5b - 경량 판단용, 규칙 기반 로직 보조)
+OLLAMA_DECISION_MODEL = os.getenv("OLLAMA_DECISION_MODEL", "qwen2.5:1.5b")
 
 
 class OllamaError(Exception):

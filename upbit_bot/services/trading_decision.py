@@ -1,4 +1,4 @@
-"""Ollama 2: 매매 결정자 (분석 및 판단용 - 7b 모델)."""
+"""Ollama 2: 매매 결정자 (분석 및 판단용 - 경량 모델)."""
 
 from __future__ import annotations
 
