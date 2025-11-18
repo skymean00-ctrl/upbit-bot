@@ -38,10 +38,14 @@ class ContinuousScannerService:
             raise ImportError("redis 모듈이 설치되지 않았습니다. pip install redis를 실행하세요.")
 
         settings = Settings()
-        self.scanner = CoinScanner(ollama_url=ollama_url, model="qwen2.5:1.5b")
+        # 스캐너는 가장 경량 모델 사용 (환경 변수 또는 기본값)
+        import os
+        scanner_model = os.getenv("OLLAMA_SCANNER_MODEL", "qwen2.5:0.5b")
+        self.scanner = CoinScanner(ollama_url=ollama_url, model=scanner_model)
         self.store = RedisScanStore(redis_url)
 
-        initial_interval = int(os.getenv("SCANNER_INTERVAL_SECONDS", "180"))
+        # 기본 스캔 간격을 약간 넉넉하게 (CPU 부담 완화)
+        initial_interval = int(os.getenv("SCANNER_INTERVAL_SECONDS", "240"))
         self.scheduler = AdaptiveScanScheduler(initial_interval=initial_interval)
 
         # UpbitClient 초기화
@@ -98,8 +102,8 @@ class ContinuousScannerService:
         LOGGER.info(f"스캔 사이클 시작 (간격: {current_interval}초)")
 
         try:
-            # 1. 거래량 상위 50개 조회
-            top_n = int(os.getenv("SCANNER_TOP_N_COINS", "50"))
+            # 1. 거래량 상위 N개 조회 (기본 30개로 축소해서 LLM 부하 감소)
+            top_n = int(os.getenv("SCANNER_TOP_N_COINS", "30"))
             markets = self.get_top_markets_by_volume(top_n=top_n)
             LOGGER.info(f"스캔 대상: {len(markets)}개 코인")
 
@@ -142,8 +146,8 @@ class ContinuousScannerService:
 
             LOGGER.info(f"캔들 데이터 조회 완료: {len(markets_data)}개 코인")
 
-            # 4. 병렬 스캔 (max_workers=10)
-            max_workers = int(os.getenv("SCANNER_MAX_WORKERS", "10"))
+            # 4. 병렬 스캔 (기본 워커 수를 줄여 CPU/LLM 부하 완화)
+            max_workers = int(os.getenv("SCANNER_MAX_WORKERS", "3"))
             scan_results = self.scanner.scan_markets(markets_data, max_workers=max_workers)
 
             LOGGER.info(f"스캔 완료: {len(scan_results)}개 코인 분석됨")

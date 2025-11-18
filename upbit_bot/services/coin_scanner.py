@@ -10,9 +10,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, UTC
 from typing import Any
 
+import requests
+
 from upbit_bot.strategies import Candle
 
 from .ollama_client import OllamaClient, OllamaError, OLLAMA_BASE_URL, OLLAMA_SCANNER_MODEL
+from .sentiment_crawler import SentimentCrawler
 
 LOGGER = logging.getLogger(__name__)
 
@@ -24,18 +27,44 @@ class CoinScanner:
         self,
         ollama_url: str | None = None,
         model: str | None = None,
-        timeout: int = 90,  # 타임아웃 90초 (Ollama 서버 응답 대기 - 네트워크 지연 고려)
+        timeout: int = 120,  # 타임아웃 120초 (Ollama 서버 응답 지연 대응)
+        fallback_url: str | None = None,  # Fallback Ollama URL (노트북 실패 시 서버로 전환)
     ) -> None:
         # ollama_url과 model이 None이면 기본값 사용
         url = ollama_url or OLLAMA_BASE_URL
         model_name = model or OLLAMA_SCANNER_MODEL
-        self.client = OllamaClient(base_url=url, model=model_name, timeout=timeout)
+        
+        # 연결 상태 사전 확인 후 사용 가능한 URL 선택
+        primary_url = url
+        self.fallback_url = fallback_url
+        self.primary_url = url
+        
+        if fallback_url:
+            # Primary URL 연결 확인 (빠른 타임아웃: 3초)
+            temp_client = OllamaClient(base_url=primary_url, model=model_name, timeout=3)
+            if not temp_client.verify_connection(quick_check=True):
+                LOGGER.warning(
+                    f"Primary Ollama 연결 실패 ({primary_url}), Fallback 사용 ({fallback_url})"
+                )
+                primary_url = fallback_url
+            else:
+                LOGGER.debug(f"Primary Ollama 연결 확인됨 ({primary_url})")
+        
+        self.client = OllamaClient(base_url=primary_url, model=model_name, timeout=timeout)
         self.last_scan_result: dict[str, dict[str, Any]] | None = None
         self.last_scan_time: datetime | None = None
         self._stop_event = threading.Event()
         self._scan_thread: threading.Thread | None = None
         self._scan_lock = threading.Lock()
         self._markets_data_callback: Any = None  # markets_data를 가져오는 콜백 함수
+        
+        # 감정 지표 크롤러 초기화 (선택적)
+        self.sentiment_crawler: SentimentCrawler | None = None
+        try:
+            self.sentiment_crawler = SentimentCrawler(timeout=5, cache_ttl=1800)  # 5초 타임아웃, 30분 캐시
+        except Exception as e:
+            LOGGER.warning(f"감정 지표 크롤러 초기화 실패: {e}, 감정 지표 없이 진행")
+            self.sentiment_crawler = None
 
     def calculate_indicators(self, candles: list[Candle]) -> dict[str, Any]:
         """기술적 지표 계산."""
@@ -74,8 +103,215 @@ class CoinScanner:
             "trend": "uptrend" if ma_5 > ma_10 > ma_20 else "downtrend",
         }
 
+    def fast_filter_by_indicators(
+        self, 
+        markets_data: dict[str, list[Candle]],
+        top_n: int = 30
+    ) -> dict[str, dict[str, Any]]:
+        """
+        기술적 지표만으로 빠르게 필터링 (Ollama 호출 없음).
+        
+        필터링 기준:
+        1. 기술적 지표 점수 계산 (가중치 기반)
+        2. 상위 N개 선정
+        
+        Args:
+            markets_data: {market: [candles]} 딕셔너리
+            top_n: 선정할 코인 개수 (기본값: 30)
+        
+        Returns:
+            {market: {score, reason, trend, risk, indicators}} 딕셔너리
+        """
+        results: dict[str, dict[str, Any]] = {}
+        
+        LOGGER.info(f"1차 빠른 필터링 시작: {len(markets_data)}개 코인 (기술적 지표만, Ollama 없음)")
+        
+        for market, candles in markets_data.items():
+            if len(candles) < 5:
+                continue
+            
+            indicators = self.calculate_indicators(candles)
+            if not indicators:
+                continue
+            
+            # 기술적 지표 기반 점수 계산 (감정 지표는 나중에 추가)
+            score = self._calculate_technical_score(indicators, sentiment=0.5)  # 기본값 0.5
+            risk = self._estimate_risk(indicators)
+            reason = self._generate_technical_reason(indicators)
+            
+            results[market] = {
+                "score": score,
+                "indicators": indicators,
+                "trend": indicators.get("trend", "unknown"),
+                "risk": risk,
+                "reason": reason,
+                "sentiment": 0.5,  # 기본값 (나중에 업데이트)
+            }
+        
+        # 기술적 지표 점수 기준 정렬 후 상위 N개 선정
+        sorted_results = dict(
+            sorted(results.items(), key=lambda x: x[1]["score"], reverse=True)[:top_n]
+        )
+        
+        # Reddit 감정 지표 크롤링 (보조 지표로 반영)
+        if self.sentiment_crawler and sorted_results:
+            try:
+                # 코인 심볼 추출 (KRW-BTC -> BTC)
+                coin_symbols = [
+                    market.replace("KRW-", "") for market in sorted_results.keys()
+                ]
+                
+                # Reddit 크롤링 (상위 10개만 크롤링하여 검토 시간 단축)
+                # 검토 시간 최소화: 상위 10개만, 빠른 타임아웃, 캐시 활용
+                LOGGER.info("Reddit 감정 지표 크롤링 시작 (보조 지표, 상위 10개만)")
+                sentiment_results = self.sentiment_crawler.crawl_multiple_coins(
+                    coin_symbols=coin_symbols,
+                    max_workers=3,  # Reddit rate limit 고려 (3개 제한)
+                    limit_per_coin=15,  # 게시물 수 최소화 (15개로 감소)
+                    top_n_only=10,  # 상위 10개만 크롤링 (검토 시간 단축: 30초 이내)
+                )
+                
+                # 감정 지표를 결과에 반영 및 점수 재계산
+                for market in sorted_results.keys():
+                    coin_symbol = market.replace("KRW-", "")
+                    sentiment_data = sentiment_results.get(coin_symbol, {})
+                    sentiment_score = sentiment_data.get("sentiment", 0.5)  # 기본값 0.5 (중립)
+                    
+                    # 감정 지표를 보조 지표로 추가
+                    sorted_results[market]["sentiment"] = sentiment_score
+                    sorted_results[market]["sentiment_source"] = sentiment_data.get("source", "none")
+                    sorted_results[market]["sentiment_post_count"] = sentiment_data.get("post_count", 0)
+                    
+                    # 감정 지표 반영하여 점수 재계산 (보조 지표 10% 가중치)
+                    indicators = sorted_results[market].get("indicators", {})
+                    updated_score = self._calculate_technical_score(indicators, sentiment=sentiment_score)
+                    sorted_results[market]["score"] = updated_score
+                    sorted_results[market]["score_technical"] = self._calculate_technical_score(indicators, sentiment=0.5)  # 원래 점수 저장
+                
+                # 감정 지표 반영 후 점수 기준 재정렬
+                sorted_results = dict(
+                    sorted(sorted_results.items(), key=lambda x: x[1]["score"], reverse=True)
+                )
+                
+                LOGGER.info(
+                    f"Reddit 감정 지표 크롤링 완료: "
+                    f"{sum(1 for r in sorted_results.values() if 'sentiment' in r)}개 코인 분석됨"
+                )
+                
+            except Exception as e:
+                LOGGER.warning(f"Reddit 감정 지표 크롤링 실패: {e}, 감정 지표 없이 진행")
+                # 실패 시 기본값 설정
+                for market in sorted_results.keys():
+                    sorted_results[market]["sentiment"] = 0.5
+                    sorted_results[market]["sentiment_source"] = "none"
+                    sorted_results[market]["sentiment_post_count"] = 0
+        else:
+            # 감정 지표 크롤러가 없으면 기본값 설정
+            for market in sorted_results.keys():
+                sorted_results[market]["sentiment"] = 0.5
+                sorted_results[market]["sentiment_source"] = "none"
+                sorted_results[market]["sentiment_post_count"] = 0
+        
+        LOGGER.info(
+            f"1차 빠른 필터링 완료: {len(sorted_results)}개 코인 선정 "
+            f"(최고 점수: {max(r['score'] for r in sorted_results.values()):.2f})"
+        )
+        
+        return sorted_results
+
+    def _calculate_technical_score(
+        self, 
+        indicators: dict[str, Any],
+        sentiment: float = 0.5  # 감정 지표 (기본값 0.5: 중립)
+    ) -> float:
+        """
+        기술적 지표 + 감정 지표로 점수 계산 (가중치 기반).
+        
+        Args:
+            indicators: 기술적 지표 딕셔너리
+            sentiment: 감정 지표 (0.0: 부정, 1.0: 긍정, 기본값: 0.5)
+        
+        Returns:
+            종합 점수 (0.0 ~ 1.0)
+        """
+        technical_score = 0.0
+        
+        # 트렌드 점수 (35%, 감정 지표 반영으로 약간 감소)
+        if indicators.get("trend") == "uptrend":
+            technical_score += 0.35
+        elif indicators.get("trend") == "downtrend":
+            technical_score += 0.1
+        
+        # 가격 변화 점수 (25%, 감정 지표 반영으로 약간 감소)
+        recent_change = indicators.get("recent_change", 0.0)
+        if recent_change > 5:
+            technical_score += 0.25
+        elif recent_change > 0:
+            technical_score += 0.15
+        elif recent_change > -5:
+            technical_score += 0.05
+        
+        # 거래량 점수 (18%, 감정 지표 반영으로 약간 감소)
+        volume_ratio = indicators.get("volume_ratio", 1.0)
+        if volume_ratio > 2.0:
+            technical_score += 0.18
+        elif volume_ratio > 1.5:
+            technical_score += 0.15
+        elif volume_ratio > 1.0:
+            technical_score += 0.1
+        
+        # 변동성 점수 (12%, 감정 지표 반영으로 약간 증가)
+        volatility = indicators.get("volatility", 0.0)
+        if 2.0 <= volatility <= 5.0:
+            technical_score += 0.12
+        elif 1.0 <= volatility < 2.0 or 5.0 < volatility <= 8.0:
+            technical_score += 0.06
+        
+        # 감정 지표 반영 (10%, 보조 지표)
+        # sentiment가 0.5보다 크면 긍정, 작으면 부정
+        sentiment_score = (sentiment - 0.5) * 0.2  # -0.1 ~ +0.1 범위로 변환
+        technical_score += sentiment_score
+        
+        return min(max(technical_score, 0.0), 1.0)  # 0.0 ~ 1.0 범위로 제한
+
+    def _estimate_risk(self, indicators: dict[str, Any]) -> str:
+        """변동성 기반 리스크 추정"""
+        volatility = indicators.get("volatility", 0.0)
+        if volatility > 8.0:
+            return "high"
+        elif volatility > 5.0:
+            return "medium"
+        else:
+            return "low"
+
+    def _generate_technical_reason(self, indicators: dict[str, Any]) -> str:
+        """기술적 지표 기반 이유 생성"""
+        reasons = []
+        
+        if indicators.get("trend") == "uptrend":
+            reasons.append("상승 추세")
+        
+        if indicators.get("recent_change", 0) > 5:
+            reasons.append("급등 중")
+        elif indicators.get("recent_change", 0) < -5:
+            reasons.append("급락 중")
+        
+        if indicators.get("volume_ratio", 1.0) > 2.0:
+            reasons.append("거래량 급증")
+        
+        return ", ".join(reasons) if reasons else "보통"
+
     def scan_single_market(self, market: str, candles: list[Candle]) -> dict[str, Any] | None:
-        """단일 코인 스캔."""
+        """
+        단일 코인 스캔 (재시도 + Fallback 포함).
+        
+        Args:
+            market: 코인 마켓 코드
+            candles: 캔들 데이터
+        
+        Returns:
+            스캔 결과 또는 None (실패 시)
+        """
         if len(candles) < 5:
             return None
 
@@ -100,31 +336,58 @@ class CoinScanner:
 다음 JSON 형식으로 응답하세요:
 {{"score": 0.0~1.0, "reason": "이유", "trend": "uptrend|downtrend", "risk": "low|medium|high"}}"""
 
-        try:
-            response_text = self.client.generate(prompt, temperature=0.3)
-            data = self.client.parse_json_response(response_text)
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                response_text = self.client.generate(prompt, temperature=0.3, max_retries=1)
+                data = self.client.parse_json_response(response_text)
 
-            return {
-                "score": float(data.get("score", 0.0)),
-                "reason": data.get("reason", ""),
-                "trend": data.get("trend", indicators["trend"]),
-                "risk": data.get("risk", "medium"),
-                "indicators": indicators,
-            }
+                return {
+                    "score": float(data.get("score", 0.0)),
+                    "reason": data.get("reason", ""),
+                    "trend": data.get("trend", indicators["trend"]),
+                    "risk": data.get("risk", "medium"),
+                    "indicators": indicators,
+                }
 
-        except OllamaError as e:
-            LOGGER.warning(f"코인 {market} 스캔 실패: {e}")
-            return None
+            except (OllamaError, requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt < max_retries - 1:
+                    # Fallback URL로 전환 시도
+                    if self.fallback_url and self.client.base_url != self.fallback_url:
+                        LOGGER.warning(
+                            f"스캔 실패 (시도 {attempt + 1}/{max_retries}), Fallback으로 전환: {e}"
+                        )
+                        from .ollama_client import OLLAMA_SCANNER_MODEL
+                        self.client = OllamaClient(
+                            base_url=self.fallback_url,
+                            model=self.client.model or OLLAMA_SCANNER_MODEL,
+                            timeout=self.client.timeout
+                        )
+                        continue
+                    else:
+                        # 짧은 대기 후 재시도
+                        wait_time = 1 * (attempt + 1)
+                        LOGGER.warning(f"스캔 실패 (시도 {attempt + 1}/{max_retries}), {wait_time}초 후 재시도: {e}")
+                        time.sleep(wait_time)
+                        continue
+                else:
+                    LOGGER.warning(f"코인 {market} 스캔 최종 실패: {e}")
+                    return None
+            except Exception as e:
+                LOGGER.warning(f"코인 {market} 스캔 중 예기치 않은 오류: {e}")
+                return None
+        
+        return None
 
     def scan_markets(
-        self, markets_data: dict[str, list[Candle]], max_workers: int = 5
+        self, markets_data: dict[str, list[Candle]], max_workers: int = 2
     ) -> dict[str, dict[str, Any]]:
         """
         여러 코인을 병렬로 스캔하여 정보 수집.
 
         Args:
             markets_data: {market: [candles]} 딕셔너리
-            max_workers: 최대 동시 처리 수 (기본값: 5, Ollama 서버 부하 고려)
+            max_workers: 최대 동시 처리 수 (기본값: 2, Ollama 서버 부하 최소화)
 
         Returns:
             {market: {score, reason, trend, risk, indicators}} 딕셔너리
@@ -151,29 +414,43 @@ class CoinScanner:
             }
 
             completed = 0
-            for future in as_completed(futures):
-                completed += 1
-                try:
-                    market, result = future.result()
-                    if result:
-                        with results_lock:
-                            results[market] = result
-                            LOGGER.debug(
-                                f"[{completed}/{len(markets_data)}] {market}: "
-                                f"score={result['score']:.2f}, "
-                                f"trend={result['trend']}, risk={result['risk']}"
-                            )
-                    
-                    # 10개마다 진행 상황 로그
-                    if completed % 10 == 0 or completed == len(markets_data):
-                        LOGGER.info(f"스캔 진행: {completed}/{len(markets_data)} 완료 ({len(results)}개 성공)")
-                except Exception as e:
-                    market = futures[future]
-                    LOGGER.warning(f"코인 {market} 스캔 처리 중 오류: {e}")
+            failed = 0
+            try:
+                for future in as_completed(futures, timeout=300):  # 전체 타임아웃 5분
+                    completed += 1
+                    try:
+                        market, result = future.result(timeout=1)  # 개별 결과 타임아웃 1초
+                        if result:
+                            with results_lock:
+                                results[market] = result
+                                LOGGER.debug(
+                                    f"[{completed}/{len(markets_data)}] {market}: "
+                                    f"score={result['score']:.2f}, "
+                                    f"trend={result['trend']}, risk={result['risk']}"
+                                )
+                        else:
+                            failed += 1
+                        
+                        # 10개마다 진행 상황 로그
+                        if completed % 10 == 0 or completed == len(markets_data):
+                            LOGGER.info(f"스캔 진행: {completed}/{len(markets_data)} 완료 ({len(results)}개 성공, {failed}개 실패)")
+                    except Exception as e:
+                        market = futures.get(future, "unknown")
+                        failed += 1
+                        LOGGER.warning(f"코인 {market} 스캔 처리 중 오류: {e}")
+                    except TimeoutError:
+                        market = futures.get(future, "unknown")
+                        failed += 1
+                        LOGGER.warning(f"코인 {market} 스캔 타임아웃")
+            except TimeoutError:
+                LOGGER.warning(f"전체 스캔 타임아웃 (5분), 완료된 {len(results)}개 결과 반환")
 
         self.last_scan_result = results
         self.last_scan_time = datetime.now(UTC)
-        LOGGER.info(f"코인 스캔 완료: {len(results)}개 코인 분석됨 (성공률: {len(results)/len(markets_data)*100:.1f}%)")
+        success_rate = (len(results) / len(markets_data) * 100) if markets_data else 0.0
+        LOGGER.info(f"코인 스캔 완료: {len(results)}개 코인 분석됨 (성공률: {success_rate:.1f}%, 실패: {failed}개)")
+        
+        # 최소 1개 이상 성공했거나, 실패했어도 빈 결과 반환 (UI 업데이트를 위해)
         return results
     
     def start_background_scanning(

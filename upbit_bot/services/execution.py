@@ -14,6 +14,7 @@ from upbit_bot.data.trade_history import TradeHistoryStore
 from upbit_bot.strategies import Candle, Strategy, StrategySignal
 from upbit_bot.utils.notifications import Notifier
 
+from .dynamic_monitor import DynamicTradingMonitor
 from .risk import PositionSizer, RiskManager
 
 LOGGER = logging.getLogger(__name__)
@@ -65,7 +66,84 @@ class ExecutionEngine:
         self.last_error: str | None = None
         self.last_ai_analysis: dict | None = None  # AI 분석 결과 저장
         self.trade_history_store = trade_history_store or TradeHistoryStore()
+        
+        # 동적 모니터링 시스템 초기화
+        self.dynamic_monitor: DynamicTradingMonitor | None = None
+        self._init_dynamic_monitor()
+        
         self._load_positions()
+
+    def _init_dynamic_monitor(self) -> None:
+        """동적 모니터링 시스템 초기화."""
+        try:
+            # 전략에 따라 고위험/저위험 모드 설정
+            is_high_risk = self.strategy.name == "ai_market_analyzer_high_risk"
+            self.dynamic_monitor = DynamicTradingMonitor(
+                check_interval=60,  # 60초 주기
+                high_risk=is_high_risk
+            )
+            
+            # 콜백 함수 설정
+            def price_callback(market: str) -> float | None:
+                """현재 가격 조회 콜백."""
+                try:
+                    ticker = self.client.get_ticker(market)
+                    if ticker:
+                        return float(ticker.get("trade_price", 0))
+                except Exception as e:
+                    LOGGER.warning(f"가격 조회 실패 ({market}): {e}")
+                return None
+            
+            def candle_callback(market: str) -> list[Candle] | None:
+                """캔들 데이터 조회 콜백."""
+                try:
+                    return self._fetch_candles_for_market(market)
+                except Exception as e:
+                    LOGGER.warning(f"캔들 조회 실패 ({market}): {e}")
+                return None
+            
+            self.dynamic_monitor.set_callbacks(price_callback, candle_callback)
+            LOGGER.info("동적 모니터링 시스템 초기화 완료")
+            
+        except Exception as e:
+            LOGGER.warning(f"동적 모니터링 초기화 실패: {e}")
+            self.dynamic_monitor = None
+
+    def _fetch_candles_for_market(self, market: str) -> list[Candle]:
+        """특정 마켓의 캔들 데이터 조회."""
+        raw = self.client.get_candles(market, unit=self.candle_unit, count=min(self.candle_count, 20))
+        candles = [
+            Candle(
+                timestamp=int(item["timestamp"]),
+                open=float(item["opening_price"]),
+                high=float(item["high_price"]),
+                low=float(item["low_price"]),
+                close=float(item["trade_price"]),
+                volume=float(item["candle_acc_trade_volume"]),
+            )
+            for item in reversed(raw)
+        ]
+        return candles
+
+    def _get_valid_market(self, markets_data: dict[str, list[Candle]] | None = None) -> str | None:
+        """유효한 마켓 찾기 (markets_data 또는 기본 마켓 중)."""
+        if markets_data:
+            # markets_data에서 첫 번째 유효한 마켓 반환
+            for market in markets_data.keys():
+                if market and market.startswith("KRW-"):
+                    return market
+        
+        # 기본 마켓 목록에서 유효한 마켓 찾기
+        default_markets = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-ADA", "KRW-DOT"]
+        for market in default_markets:
+            try:
+                test_candles = self._fetch_candles_for_market(market)
+                if test_candles and len(test_candles) >= 5:
+                    return market
+            except Exception:
+                continue
+        
+        return None
 
     def _load_positions(self) -> None:
         """Load open positions from trade history."""
@@ -294,7 +372,12 @@ class ExecutionEngine:
         for notifier in self.notifiers:
             notifier.send(message, **kwargs)
 
-    def _execute_signal(self, signal: StrategySignal, candles: list[Candle]) -> dict | None:
+    def _execute_signal(
+        self, 
+        signal: StrategySignal, 
+        candles: list[Candle],
+        ai_timing: str | None = None
+    ) -> dict | None:
         self.last_order_info = None
         if signal is StrategySignal.HOLD:
             LOGGER.debug("No action taken for market %s (HOLD signal)", self.market)
@@ -311,12 +394,29 @@ class ExecutionEngine:
         )
 
         if signal is StrategySignal.BUY:
-            if self.position_price is not None:
-                LOGGER.warning("⚠️ BUY SIGNAL IGNORED: Position already open for %s (price: %.0f, volume: %.6f)", 
-                              self.market, self.position_price, self.position_volume or 0.0)
+            # AI 타이밍 판단 우선 (기술적 체크는 보조 역할)
+            if ai_timing == "now":
+                # AI가 즉시 매수 타이밍으로 판단한 경우, 기술적 체크는 최소화
+                LOGGER.info(f"🤖 AI 즉시 매수 타이밍: {self.market} (기술적 체크 최소화)")
+            elif ai_timing == "watch":
+                # AI가 관찰 중 타이밍으로 판단한 경우, 조건부 실행
+                LOGGER.info(f"👀 AI 관찰 중 타이밍: {self.market} (조건부 실행)")
+            elif ai_timing == "wait":
+                # AI가 대기 중으로 판단한 경우, 매수 하지 않음
+                LOGGER.info(f"⏳ AI 대기 중 타이밍: {self.market} (매수 실행 안함)")
                 return None
             
-            # 포트폴리오 체크: 최대 5개 포지션
+            # 기술적 체크 (AI 타이밍이 "now"인 경우 최소화, 다른 경우 정상 체크)
+            if self.position_price is not None:
+                if ai_timing != "now":  # AI 즉시 매수 타이밍이 아니면 포지션 중복 체크
+                    LOGGER.warning("⚠️ BUY SIGNAL IGNORED: Position already open for %s (price: %.0f, volume: %.6f)", 
+                                  self.market, self.position_price, self.position_volume or 0.0)
+                    return None
+                else:
+                    LOGGER.info("⚠️ AI 즉시 매수 타이밍이지만 이미 포지션 보유 중, 기존 포지션 유지")
+                    return None
+            
+            # 포트폴리오 체크: 최대 5개 포지션 (AI 타이밍과 무관하게 적용)
             if not self.can_open_new_position():
                 # 최대 개수 모두 찼으면 가장 나쁜 포지션 청산
                 LOGGER.warning(f"⚠️ BUY SIGNAL BLOCKED: Portfolio full ({MAX_POSITIONS} positions). Attempting to liquidate worst position...")
@@ -327,7 +427,8 @@ class ExecutionEngine:
                 # 청산 후 새로운 포지션 매수
                 LOGGER.info(f"✅ Portfolio space created, proceeding with BUY signal")
             
-            if self.risk_manager and not self.risk_manager.can_open_position(self.market):
+            # 리스크 매니저 체크 (AI 타이밍이 "now"인 경우 최소화)
+            if ai_timing != "now" and self.risk_manager and not self.risk_manager.can_open_position(self.market):
                 LOGGER.warning("⚠️ BUY SIGNAL BLOCKED: Risk manager rejected opening position for %s", self.market)
                 return None
             stake = self._determine_order_amount()
@@ -693,34 +794,90 @@ class ExecutionEngine:
                     if is_high_risk
                     else 0.6
                 )
-                # 분산 모드 확인
+                # 하이브리드 모드: 노트북 Ollama 우선, 실패 시 서버로 자동 Fallback
                 import os
-                use_distributed = os.getenv("USE_DISTRIBUTED_SCANNER", "false").lower() == "true"
-                remote_scanner_url = os.getenv("SCANNER_API_URL")
+                import requests
+                
+                # USE_DISTRIBUTED_SCANNER는 무시하고 항상 로컬 스캐너 사용
+                use_distributed = False
+                remote_scanner_url = None
+                
+                # 노트북 Ollama URL (환경 변수로 설정 가능)
+                notebook_ollama_url = os.getenv("NOTEBOOK_OLLAMA_URL")  # 예: "http://100.98.189.30:11434"
+                server_ollama_url = (
+                    os.getenv("OLLAMA_SCANNER_URL")
+                    or os.getenv("OLLAMA_BASE_URL")
+                    or "http://127.0.0.1:11434"
+                )
+                
+                # 노트북 Ollama가 설정되어 있으면 우선 사용 (연결 상태 확인)
+                scanner_url = server_ollama_url
+                fallback_url = None
+                
+                if notebook_ollama_url:
+                    # 연결 상태 빠른 확인 (3초)
+                    try:
+                        test_response = requests.get(f"{notebook_ollama_url}/api/tags", timeout=3)
+                        if test_response.status_code == 200:
+                            scanner_url = notebook_ollama_url
+                            fallback_url = server_ollama_url
+                            LOGGER.info(
+                                f"스캐너: 노트북 Ollama 사용 ({notebook_ollama_url}), "
+                                f"Fallback: 서버 ({server_ollama_url})"
+                            )
+                        else:
+                            scanner_url = server_ollama_url
+                            fallback_url = None
+                            LOGGER.warning(f"노트북 Ollama 응답 오류, 서버 Ollama 사용")
+                    except Exception as e:
+                        scanner_url = server_ollama_url
+                        fallback_url = None
+                        LOGGER.warning(f"노트북 Ollama 연결 실패 ({e}), 서버 Ollama 사용")
+                else:
+                    scanner_url = server_ollama_url
+                    fallback_url = None
+                    LOGGER.info(f"스캐너: 서버 Ollama 사용 ({server_ollama_url})")
                 
                 dual_engine = DualOllamaEngine(
+                    ollama_url=scanner_url,
                     confidence_threshold=confidence_threshold,
                     high_risk=is_high_risk,
                     use_distributed=use_distributed,
                     remote_scanner_url=remote_scanner_url,
                 )
+                
+                # Fallback URL 설정 (CoinScanner에 전달)
+                if fallback_url and hasattr(dual_engine.scanner, 'client'):
+                    dual_engine.scanner.fallback_url = fallback_url
+                    dual_engine.scanner.primary_url = scanner_url
+                    LOGGER.info(f"Fallback URL 설정 완료: {fallback_url}")
             
             # 거래량 상위 30개 코인 가져오기 (하이브리드 방식: 상위 30개만 스캔)
             markets = self.client.get_top_volume_markets(limit=30)
             LOGGER.info(f"거래량 상위 30개 코인 선택: {len(markets)}개")
             
-            # 이미 포지션이 있는 코인은 제외
+            # 포트폴리오 정보 가져오기
             portfolio = self.get_portfolio_status()
-            open_markets = {pos.get("market") for pos in portfolio.get("open_positions", [])}
-            markets_to_analyze = [m for m in markets if m not in open_markets]
+            open_positions = portfolio.get("open_positions", [])
+            open_markets = {pos.get("market") for pos in open_positions if pos.get("market")}
+            
+            # 보유 중인 코인도 분석에 포함 (추가 매수 판단을 위해)
+            # 신규 코인과 보유 코인을 모두 분석 대상에 포함
+            markets_to_analyze = list(markets)  # 신규 코인
+            held_markets = list(open_markets)  # 보유 중인 코인
+            
+            # 보유 중인 코인이 markets에 없으면 추가
+            for held_market in held_markets:
+                if held_market and held_market not in markets_to_analyze:
+                    markets_to_analyze.append(held_market)
             
             if not markets_to_analyze:
-                LOGGER.info("분석할 코인이 없음 (모두 포지션 보유 중)")
+                LOGGER.info("분석할 코인이 없음")
                 candles = self._fetch_candles()
                 signal = self.strategy.on_candles(candles)
                 return self.market, signal, candles
             
-            LOGGER.info(f"이중 Ollama 분석 시작: {len(markets_to_analyze)}개 코인")
+            LOGGER.info(f"이중 Ollama 분석 시작: {len(markets_to_analyze)}개 코인 (신규: {len(markets)}, 보유: {len(held_markets)})")
             
             # 모든 코인의 캔들 데이터 수집
             markets_data: dict[str, list[Candle]] = {}
@@ -886,28 +1043,221 @@ class ExecutionEngine:
             
             # 선택된 코인으로 market 업데이트
             if selected_market:
-                self.market = selected_market
-                candles = markets_data.get(selected_market, self._fetch_candles())
+                # 유효한 마켓인지 확인
+                try:
+                    # markets_data에 있는지 확인
+                    if selected_market in markets_data:
+                        self.market = selected_market
+                        candles = markets_data[selected_market]
+                    else:
+                        # markets_data에 없으면 유효성 검증 후 캔들 가져오기
+                        try:
+                            test_candles = self._fetch_candles_for_market(selected_market)
+                            if test_candles and len(test_candles) >= 5:
+                                self.market = selected_market
+                                candles = test_candles
+                            else:
+                                LOGGER.warning(f"선택된 마켓 {selected_market}의 캔들 데이터가 부족함. 기본 마켓 사용")
+                                # 유효한 기본 마켓 찾기
+                                valid_market = self._get_valid_market(markets_data)
+                                if valid_market:
+                                    self.market = valid_market
+                                    candles = markets_data.get(valid_market, self._fetch_candles())
+                                else:
+                                    candles = self._fetch_candles()
+                        except Exception as market_error:
+                            LOGGER.warning(f"선택된 마켓 {selected_market} 유효성 검증 실패: {market_error}. 기본 마켓 사용")
+                            # 유효한 기본 마켓 찾기
+                            valid_market = self._get_valid_market(markets_data)
+                            if valid_market:
+                                self.market = valid_market
+                                candles = markets_data.get(valid_market, self._fetch_candles())
+                            else:
+                                candles = self._fetch_candles()
+                except Exception as market_error:
+                    LOGGER.error(f"마켓 설정 중 오류: {market_error}")
+                    # 유효한 기본 마켓 찾기
+                    valid_market = self._get_valid_market(markets_data)
+                    if valid_market:
+                        self.market = valid_market
+                        candles = markets_data.get(valid_market, self._fetch_candles())
+                    else:
+                        candles = self._fetch_candles()
+                
+                # 동적 모니터링 업데이트 (final_candidates가 있으면)
+                if self.dynamic_monitor and analysis_data.get("final_candidates"):
+                    final_candidates = analysis_data.get("final_candidates", [])
+                    if final_candidates:
+                        LOGGER.info(
+                            f"동적 모니터링 업데이트: {len(final_candidates)}개 코인 관찰 시작 "
+                            f"(각 코인별 전략에 따른 매수/매도 타이밍 판단)"
+                        )
+                        self.dynamic_monitor.update_final_candidates(final_candidates)
+                        
+                        # 모니터링 시작 (아직 시작되지 않았으면)
+                        if not self.dynamic_monitor._monitor_thread or not self.dynamic_monitor._monitor_thread.is_alive():
+                            self.dynamic_monitor.start_monitoring()
+                            LOGGER.info("동적 모니터링 시작됨 (최종 선정 5개 코인 관찰, 각각 독립적으로 매매 타이밍 판단)")
+                        
+                        # 5개 선정 직후 "now" 타이밍인 코인은 즉시 매매 처리
+                        for candidate in final_candidates:
+                            market = candidate.get("market", "")
+                            buy_timing = candidate.get("buy_timing", "wait")
+                            buy_signal = candidate.get("buy_signal", "none")
+                            
+                            # "now" 타이밍이고 strong/medium 신호면 즉시 매매
+                            if buy_timing == "now" and buy_signal in ("strong", "medium"):
+                                try:
+                                    original_market = self.market
+                                    self.market = market
+                                    candles = self._fetch_candles()
+                                    
+                                    LOGGER.info(
+                                        f"🟢 5개 선정 직후 즉시 매매: {market} "
+                                        f"(타이밍: now, 신호: {buy_signal})"
+                                    )
+                                    
+                                    signal = StrategySignal.BUY
+                                    result = self._execute_signal(signal, candles, ai_timing="now")
+                                    
+                                    # 매매 완료 후 해당 코인의 entry_signal 초기화
+                                    self.dynamic_monitor.clear_entry_signal(market)
+                                    
+                                    self.market = original_market
+                                    LOGGER.info(f"✅ 즉시 매매 완료: {market}")
+                                    
+                                except Exception as exc:  # noqa: BLE001
+                                    LOGGER.error(f"즉시 매매 실패 ({market}): {exc}")
+                                    if self.market == market:
+                                        self.market = original_market
+                                    continue
+                
+                # AI 타이밍 정보 로깅
+                final_decision = analysis_data.get("final_decision", {})
+                timing = final_decision.get("timing", "unknown")
+                
+                # final_candidates 개수 확인
+                final_candidates_count = len(analysis_data.get("final_candidates", []))
                 
                 LOGGER.info(
-                    f"✅ 이중 Ollama 분석 완료: {selected_market} {signal.value} "
-                    f"(신뢰도: {confidence:.2%})"
+                    f"✅ 이중 Ollama 분석 완료: {final_candidates_count}개 코인 선정, "
+                    f"현재 선택: {self.market} {signal.value} "
+                    f"(신뢰도: {confidence:.2%}, 타이밍: {timing})"
                 )
-                return selected_market, signal, candles
+                # selected_market은 참고용, 실제 매매는 동적 모니터링에서 각 코인별로 진행
+                return self.market, signal, candles
             else:
-                # 신호가 없으면 기존 market 유지
+                # 신호가 없으면 기존 market 유지 (유효성 검증)
+                try:
+                    # 현재 market이 유효한지 확인
+                    test_candles = self._fetch_candles()
+                    if not test_candles or len(test_candles) < 5:
+                        # 유효하지 않으면 markets_data에서 유효한 마켓 찾기
+                        valid_market = self._get_valid_market(markets_data)
+                        if valid_market:
+                            self.market = valid_market
+                            candles = markets_data.get(valid_market, self._fetch_candles())
+                        else:
+                            candles = self._fetch_candles()
+                    else:
+                        candles = test_candles
+                except Exception as market_error:
+                    LOGGER.warning(f"기본 마켓 {self.market} 유효성 검증 실패: {market_error}")
+                    # 유효한 기본 마켓 찾기
+                    valid_market = self._get_valid_market(markets_data)
+                    if valid_market:
+                        self.market = valid_market
+                        candles = markets_data.get(valid_market, self._fetch_candles())
+                    else:
+                        candles = self._fetch_candles()
+                
                 LOGGER.info("매매 신호 없음, 기본 코인 유지")
-                candles = self._fetch_candles()
                 return self.market, signal, candles
                 
         except Exception as e:
             LOGGER.error(f"이중 Ollama 분석 실패: {e}, 기본 코인 사용", exc_info=True)
-            candles = self._fetch_candles()
-            signal = self.strategy.on_candles(candles)
+            try:
+                candles = self._fetch_candles()
+                signal = self.strategy.on_candles(candles)
+            except Exception as fetch_error:
+                LOGGER.error(f"기본 코인 캔들 가져오기 실패: {fetch_error}")
+                # 최후의 수단: KRW-BTC 사용
+                try:
+                    self.market = "KRW-BTC"
+                    candles = self._fetch_candles()
+                    signal = self.strategy.on_candles(candles)
+                except Exception as final_error:
+                    LOGGER.error(f"KRW-BTC 캔들 가져오기 실패: {final_error}")
+                    signal = StrategySignal.HOLD
+                    candles = []
             return self.market, signal, candles
     
     def run_once(self) -> dict | None:
+        # AI 전략인 경우 동적 모니터링에서 5개 선정 코인 모두 확인
+        ai_strategies = ["ai_market_analyzer", "ai_market_analyzer_high_risk"]
+        if self.strategy.name in ai_strategies and self.dynamic_monitor:
+            # 동적 모니터링 상태 확인
+            monitoring_status = self.dynamic_monitor.get_monitoring_status()
+            monitored_markets = monitoring_status.get("markets", [])
+            
+            if monitored_markets:
+                # 5개 선정 코인 각각에 대해 매수 타이밍 확인
+                executed_any = False
+                for market in monitored_markets:
+                    entry_signal = self.dynamic_monitor.get_entry_signal(market)
+                    if entry_signal:
+                        timing = entry_signal.get("timing", "unknown")
+                        signal_type = entry_signal.get("type", "unknown")
+                        reason = entry_signal.get("reason", "")
+                        
+                        LOGGER.info(
+                            f"🤖 AI 타이밍 감지: {market} - "
+                            f"타이밍: {timing}, 신호: {entry_signal.get('signal')}, 이유: {reason}"
+                        )
+                        
+                        # AI 타이밍이 "now"이거나 "watch"에서 조건 충족 시 BUY 신호 생성
+                        if timing in ("now", "watch") and entry_signal.get("signal") in ("strong", "medium"):
+                            # 해당 코인으로 market 변경
+                            original_market = self.market
+                            self.market = market
+                            
+                            try:
+                                signal = StrategySignal.BUY
+                                candles = self._fetch_candles()
+                                
+                                LOGGER.info(
+                                    f"🟢 AI 타이밍 기반 BUY SIGNAL: {market} "
+                                    f"(타이밍: {timing}, 신호: {entry_signal.get('signal')})"
+                                )
+                                
+                                self.last_signal = signal
+                                self.last_run_at = datetime.now(UTC)
+                                self.last_error = None
+                                
+                                result = self._execute_signal(signal, candles, ai_timing=timing)
+                                executed_any = True
+                                
+                                # get_entry_signal이 이미 시그널을 초기화하므로 추가 초기화 불필요
+                                # 다음 코인 확인을 위해 계속 진행 (여러 코인 동시 매매 가능)
+                                continue
+                                
+                            except Exception as exc:  # noqa: BLE001
+                                self.last_error = str(exc)
+                                LOGGER.error(f"매매 실행 실패 ({market}): {exc}")
+                                # 실패해도 원래 market으로 복구
+                                self.market = original_market
+                                continue
+                            finally:
+                                # 원래 market으로 복구 (다음 코인 확인을 위해)
+                                if self.market == market:
+                                    self.market = original_market
+                
+                # 동적 모니터링에서 매매가 실행되었으면 여기서 종료
+                if executed_any:
+                    return {"status": "executed", "message": "동적 모니터링 기반 매매 완료"}
+        
         # AI 전략이면 여러 코인 분석, 아니면 기존 방식
+        # (동적 모니터링에서 매매가 없었을 때만 실행)
         selected_market, signal, candles = self._analyze_multiple_markets()
         
         # 시그널 발생 여부 명확히 로깅
@@ -940,6 +1290,9 @@ class ExecutionEngine:
                         self.last_ai_analysis['signal'] = str(signal_obj)
                 
                 LOGGER.info(f"AI analysis saved: market={selected_market}, signal={self.last_ai_analysis.get('signal')}, confidence={self.last_ai_analysis.get('confidence', 0):.2%}")
+                
+                # 5개 선정 코인 외로 선정 코인을 뛰어넘는 점수의 코인 발생시 수익률 제일 낮은 코인 청산 후 신규 코인 매수
+                self._check_and_replace_with_higher_score_coin()
             else:
                 # AI 분석 결과가 없으면 빈 결과 저장 (콘솔에 표시하기 위해)
                 self.last_ai_analysis = {
@@ -986,6 +1339,11 @@ class ExecutionEngine:
 
     def stop(self, join: bool = False, timeout: float | None = None) -> None:
         self._stop_event.set()
+        
+        # 동적 모니터링 중지
+        if self.dynamic_monitor:
+            self.dynamic_monitor.stop_monitoring()
+        
         if join and self._worker and self._worker.is_alive():
             self._worker.join(timeout=timeout)
 
@@ -1401,3 +1759,216 @@ class ExecutionEngine:
             LOGGER.error(f"❌ Failed to liquidate worst position: {e}", exc_info=True)
         
         return result
+    
+    def _check_and_replace_with_higher_score_coin(self) -> None:
+        """
+        5개 선정 코인 외로 선정 코인을 뛰어넘는 점수의 코인 발생시 
+        수익률 제일 낮은 코인 청산 후 신규 코인 매수.
+        
+        작동:
+        1. final_candidates (5개)와 second_round_candidates (10개) 비교
+        2. second_round_candidates 중 final_candidates에 없는 코인 중 더 높은 점수 코인 찾기
+        3. 현재 보유 중인 코인 중 수익률이 가장 낮은 코인 찾기
+        4. 더 높은 점수 코인이 있고, 보유 코인이 있으면 청산 후 신규 매수
+        """
+        try:
+            # AI 분석 결과에서 후보 정보 가져오기
+            if not hasattr(self, 'last_ai_analysis') or not self.last_ai_analysis:
+                return
+            
+            final_candidates = self.last_ai_analysis.get("final_candidates", [])
+            second_round_candidates = self.last_ai_analysis.get("second_round_candidates", [])
+            
+            if not final_candidates or not second_round_candidates:
+                return
+            
+            # final_candidates의 market과 최고 점수 확인
+            final_markets = {c.get("market") for c in final_candidates if c.get("market")}
+            final_max_score = max(
+                (float(c.get("score_eff", c.get("score", 0.0))) for c in final_candidates),
+                default=0.0
+            )
+            
+            # second_round_candidates 중 final_candidates에 없는 코인 중 더 높은 점수 코인 찾기
+            higher_score_candidates = []
+            for candidate in second_round_candidates:
+                market = candidate.get("market", "")
+                if market in final_markets:
+                    continue  # 이미 final_candidates에 포함된 코인은 제외
+                
+                score = float(candidate.get("score_eff", candidate.get("score", 0.0)))
+                if score > final_max_score:
+                    higher_score_candidates.append({
+                        "market": market,
+                        "score": score,
+                        "candidate": candidate,
+                    })
+            
+            if not higher_score_candidates:
+                return  # 더 높은 점수 코인이 없으면 종료
+            
+            # 가장 높은 점수 코인 선택
+            best_candidate = max(higher_score_candidates, key=lambda x: x["score"])
+            new_market = best_candidate["market"]
+            new_score = best_candidate["score"]
+            
+            LOGGER.info(
+                f"🔍 더 높은 점수 코인 발견: {new_market} (점수: {new_score:.2f}, "
+                f"final_candidates 최고 점수: {final_max_score:.2f})"
+            )
+            
+            # 현재 보유 중인 코인 확인
+            portfolio = self.get_portfolio_status()
+            open_positions = portfolio.get("open_positions", [])
+            
+            if not open_positions:
+                LOGGER.info(f"보유 코인이 없어 {new_market} 매수 불가 (포트폴리오 공간 필요)")
+                return
+            
+            # 수익률이 가장 낮은 코인 찾기
+            worst_position = portfolio.get("worst_position")
+            if not worst_position:
+                worst_position = min(
+                    open_positions,
+                    key=lambda p: p.get("pnl_pct", float("inf"))
+                )
+            
+            worst_market = worst_position.get("market")
+            worst_pnl = worst_position.get("pnl_pct", 0)
+            
+            LOGGER.info(
+                f"🔄 코인 교체 결정: {worst_market} (수익률: {worst_pnl:.2f}%) → "
+                f"{new_market} (점수: {new_score:.2f})"
+            )
+            
+            # 가장 낮은 수익률 코인 청산
+            liquidate_result = self.liquidate_position_by_market(worst_market)
+            if not liquidate_result.get("success"):
+                LOGGER.error(
+                    f"❌ 코인 교체 실패: {worst_market} 청산 실패 - {liquidate_result.get('error')}"
+                )
+                return
+            
+            LOGGER.info(f"✅ {worst_market} 청산 완료, {new_market} 매수 준비")
+            
+            # 신규 코인을 동적 모니터링에 추가
+            if self.dynamic_monitor:
+                new_candidate_data = best_candidate["candidate"]
+                # final_candidates에 임시로 추가하여 모니터링 시작
+                final_candidates.append(new_candidate_data)
+                self.dynamic_monitor.update_final_candidates(final_candidates)
+                LOGGER.info(f"📊 {new_market} 동적 모니터링 시작")
+            
+            # market을 신규 코인으로 변경하여 다음 실행에서 매수되도록 함
+            self.market = new_market
+            LOGGER.info(f"🟢 {new_market} 매수 신호 준비 완료 (다음 실행 주기에서 매수)")
+            
+        except Exception as e:
+            LOGGER.error(f"코인 교체 로직 실행 중 오류: {e}", exc_info=True)
+    
+    def liquidate_position_by_market(self, market: str) -> dict[str, Any]:
+        """
+        특정 market의 포지션을 청산.
+        
+        Args:
+            market: 청산할 코인 market (예: "KRW-BTC")
+        
+        Returns:
+            청산 결과 딕셔너리
+        """
+        result = {
+            "status": "liquidate_by_market",
+            "market": market,
+            "executed_at": datetime.now(UTC).isoformat(),
+            "success": False,
+        }
+        
+        try:
+            # 포트폴리오에서 해당 market 포지션 찾기
+            portfolio = self.get_portfolio_status()
+            open_positions = portfolio.get("open_positions", [])
+            
+            target_position = None
+            for pos in open_positions:
+                if pos.get("market") == market:
+                    target_position = pos
+                    break
+            
+            if not target_position:
+                result["error"] = f"No open position found for {market}"
+                return result
+            
+            entry_volume = float(target_position.get("entry_volume", 0))
+            current_price = float(target_position.get("current_price", 0))
+            pnl_pct = target_position.get("pnl_pct", 0)
+            
+            # 실제 계정 잔액 확인
+            currency = market.replace("KRW-", "")
+            actual_balance = 0.0
+            try:
+                accounts = self.client.get_accounts()
+                for account in accounts:
+                    if account.get("currency") == currency:
+                        actual_balance = float(account.get("balance", 0))
+                        break
+            except Exception as e:
+                LOGGER.warning(f"Failed to get actual balance for {market}: {e}")
+            
+            # 실제 잔액과 DB 기록 중 더 작은 값 사용
+            sell_volume = min(entry_volume, actual_balance) if actual_balance > 0 else entry_volume
+            
+            if sell_volume <= 0:
+                result["error"] = f"No balance available for {market} (entry_volume: {entry_volume}, actual_balance: {actual_balance})"
+                LOGGER.error(result["error"])
+                return result
+            
+            sell_amount = sell_volume * current_price
+            
+            # 최소 금액 체크
+            if sell_amount < 5000:
+                result["error"] = f"Sell amount {sell_amount:.0f}원 < 5,000원 (volume: {sell_volume}, price: {current_price})"
+                LOGGER.warning(result["error"])
+                return result
+            
+            LOGGER.info(
+                f"Liquidating position: {market} "
+                f"(PnL: {pnl_pct:.2f}%, Volume: {sell_volume:.6f}, Amount: {sell_amount:.0f}원)"
+            )
+            
+            # 시장가 매도
+            order = self.client.place_order(
+                market=market,
+                side="ask",
+                volume=str(sell_volume),
+                ord_type="market",
+            )
+            
+            # 청산 후 포지션 업데이트
+            try:
+                open_positions = self.trade_history_store.get_open_positions(market=market)
+                if open_positions:
+                    position_id = open_positions[0]["id"]
+                    exit_price = float(order.get("price", current_price))
+                    exit_volume = float(order.get("executed_volume", sell_volume))
+                    exit_amount = exit_price * exit_volume
+                    
+                    self.trade_history_store.close_position(
+                        position_id=position_id,
+                        exit_price=exit_price,
+                        exit_volume=exit_volume,
+                        exit_amount=exit_amount,
+                    )
+                    
+                    LOGGER.info(f"Position {position_id} closed for {market}")
+            except Exception as e:
+                LOGGER.warning(f"Failed to close position in DB for {market}: {e}")
+            
+            result["success"] = True
+            result["pnl_pct"] = pnl_pct
+            result["sell_amount"] = sell_amount
+            result["message"] = f"{market} 청산 완료 (수익률: {pnl_pct:.2f}%)"
+            return result
+        except Exception as e:
+            LOGGER.error(f"청산 실패 ({market}): {e}")
+            result["error"] = str(e)
+            return result

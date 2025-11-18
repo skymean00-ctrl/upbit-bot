@@ -30,7 +30,7 @@ class UpbitClient:
         access_key: str,
         secret_key: str,
         session: requests.Session | None = None,
-        timeout: int = 10,
+        timeout: int = 15,
     ) -> None:
         self.access_key = access_key
         self.secret_key = secret_key

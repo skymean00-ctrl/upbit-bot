@@ -75,7 +75,9 @@ class TradingController:
         
         LOGGER = logging.getLogger(__name__)
         
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://100.98.189.30:11434")
+        # 서버 로컬 Ollama 사용 (환경 변수 또는 기본값)
+        from upbit_bot.services.ollama_client import OLLAMA_BASE_URL
+        ollama_base_url = os.getenv("OLLAMA_SCANNER_URL") or os.getenv("OLLAMA_BASE_URL") or OLLAMA_BASE_URL
         # 단일 모델 구조 (현재는 1.5b 동일 모델 사용)
         scanner_model = os.getenv("OLLAMA_SCANNER_MODEL", "qwen2.5:1.5b")
         decision_model = os.getenv("OLLAMA_DECISION_MODEL", "qwen2.5:1.5b")
@@ -151,12 +153,12 @@ class TradingController:
             error_msg = "연결 시간 초과 (5초)"
             status["error"] = error_msg
             LOGGER.warning(f"Ollama 서버 연결 시간 초과: {ollama_base_url}")
-            LOGGER.info("노트북이 켜져 있고 'ollama serve'가 실행 중인지 확인하세요.")
+            LOGGER.info("서버 Ollama 서버가 실행 중인지 확인하세요: 'ollama serve' 또는 'systemctl status ollama'")
         except requests.exceptions.ConnectionError as e:
             error_msg = f"연결 실패: {str(e)[:100]}"
             status["error"] = error_msg
             LOGGER.warning(f"Ollama 서버에 연결할 수 없습니다: {ollama_base_url}")
-            LOGGER.info("노트북이 꺼져 있거나 Ollama 서버가 실행 중이지 않습니다.")
+            LOGGER.info("서버 Ollama 서버가 실행 중이지 않습니다. 'ollama serve' 또는 'systemctl start ollama'를 실행하세요.")
         except Exception as e:
             error_msg = f"오류: {str(e)[:100]}"
             status["error"] = error_msg
@@ -166,9 +168,16 @@ class TradingController:
         return status
 
     def get_account_overview(self) -> dict[str, Any]:
+        """
+        업비트 계정 요약 정보 조회.
+
+        - 인증 오류(401 / invalid_access_key)와
+          네트워크/타임아웃 오류를 구분해서 UI에 전달한다.
+        """
         try:
             accounts = self.client.get_accounts()
         except Exception as exc:  # noqa: BLE001
+            # 에러 메시지를 그대로 넘기되, 이후 템플릿에서 유형별로 분기
             return {"error": str(exc), "accounts": []}
 
         overview: dict[str, Any] = {"accounts": accounts}

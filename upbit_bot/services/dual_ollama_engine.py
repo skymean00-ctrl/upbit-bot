@@ -64,11 +64,11 @@ class DualOllamaEngine:
                 f"최대 나이: {max_age_seconds}초)"
             )
         else:
-            # 레거시 모드: 로컬 스캐너 사용
+            # 서버 로컬 스캐너 사용 (기본 모드)
             url = ollama_url or OLLAMA_BASE_URL
             self.scanner = CoinScanner(ollama_url=url, model=scanner_model)
             self.remote_scanner = None
-            LOGGER.info(f"레거시 모드: 로컬 스캐너 사용 ({url})")
+            LOGGER.info(f"서버 로컬 스캐너 사용 ({url}) - 모든 스캔 및 분석은 서버에서 처리됩니다")
 
         # Decision Maker는 항상 필요
         decision_url = os.getenv("OLLAMA_DECISION_URL", ollama_url or OLLAMA_BASE_URL)
@@ -202,7 +202,7 @@ class DualOllamaEngine:
         current_portfolio: dict[str, Any],
         market_context: dict[str, Any],
     ) -> tuple[StrategySignal, str | None, float, dict[str, Any]]:
-        """로컬 스캐너 사용 분석 (레거시 모드)."""
+        """서버 로컬 스캐너 사용 분석 (서버에서 모든 처리)."""
 
         # 기존 로직 유지
         if not self.scanner:
@@ -211,43 +211,111 @@ class DualOllamaEngine:
 
             self.scanner = CoinScanner(ollama_url=OLLAMA_BASE_URL)
 
-        # Step 1: Ollama 1 - 코인 스캔 (최신 스캔 결과 재사용 또는 새로 스캔)
-        LOGGER.info("Step 1: 코인 스캔 (Ollama 1 - 정보 수집)")
-
-        # 최신 스캔 결과 확인 (60초 이내면 재사용)
+        # Step 1: 1차 빠른 필터링 (기술적 지표만, Ollama 호출 없음)
+        LOGGER.info("Step 1: 1차 빠른 필터링 (기술적 지표만, Ollama 없음)")
+        
+        # 최신 스캔 결과 확인 (캐시 우선 사용: 30분 이내면 재사용)
         from datetime import UTC, datetime
 
         last_scan_time = self.scanner.last_scan_time
+        coin_analyses: dict[str, dict[str, Any]] = {}
+        CACHE_MAX_AGE = 1800  # 30분 (1800초)
+        
         if last_scan_time:
             time_diff = (datetime.now(UTC) - last_scan_time).total_seconds()
-            if time_diff < 60:  # 60초 이내면 재사용
-                coin_analyses = self.scanner.get_last_scan_result()
+            if time_diff < CACHE_MAX_AGE:  # 30분 이내면 재사용
+                coin_analyses = self.scanner.get_last_scan_result() or {}
                 if coin_analyses:
-                    LOGGER.info(f"최신 스캔 결과 재사용 ({time_diff:.1f}초 전 스캔)")
+                    LOGGER.info(
+                        f"캐시된 스캔 결과 재사용 ({time_diff:.1f}초 전 스캔, {len(coin_analyses)}개 코인)"
+                    )
                 else:
-                    # 스캔 결과가 없으면 새로 스캔
-                    coin_analyses = self.scanner.scan_markets(markets_data)
+                    # 스캔 결과가 없으면 빠른 필터링 실행
+                    LOGGER.info("스캔 결과 없음, 빠른 필터링 시작")
+                    try:
+                        coin_analyses = self.scanner.fast_filter_by_indicators(markets_data, top_n=30)
+                        # 결과 저장 (다음 분석에서 재사용)
+                        self.scanner.last_scan_result = coin_analyses
+                        self.scanner.last_scan_time = datetime.now(UTC)
+                    except Exception as e:
+                        LOGGER.error(f"빠른 필터링 실패: {e}, 캐시 확인")
+                        # 스캔 실패 시 캐시 재확인 (더 오래된 것도 허용)
+                        cached_result = self.scanner.get_last_scan_result()
+                        if cached_result:
+                            cache_age = (datetime.now(UTC) - last_scan_time).total_seconds()
+                            if cache_age < CACHE_MAX_AGE * 2:  # 60분 이내 캐시 허용
+                                LOGGER.warning(f"필터링 실패, 오래된 캐시 사용 ({cache_age:.0f}초 전)")
+                                coin_analyses = cached_result
+                            else:
+                                LOGGER.warning("캐시도 너무 오래됨, 빈 결과 반환")
+                                coin_analyses = {}
+                        else:
+                            coin_analyses = {}
             else:
-                # 60초 이상 지났으면 새로 스캔
-                LOGGER.info(f"스캔 결과가 오래됨 ({time_diff:.1f}초), 새로 스캔")
-                coin_analyses = self.scanner.scan_markets(markets_data)
+                # 30분 이상 지났으면 새로 빠른 필터링
+                LOGGER.info(f"스캔 결과가 오래됨 ({time_diff:.1f}초), 새로 빠른 필터링")
+                try:
+                    coin_analyses = self.scanner.fast_filter_by_indicators(markets_data, top_n=30)
+                    # 결과 저장
+                    self.scanner.last_scan_result = coin_analyses
+                    self.scanner.last_scan_time = datetime.now(UTC)
+                except Exception as e:
+                    LOGGER.error(f"빠른 필터링 실패: {e}, 캐시 확인")
+                    # 스캔 실패 시 캐시 재확인
+                    cached_result = self.scanner.get_last_scan_result()
+                    if cached_result:
+                        cache_age = (datetime.now(UTC) - last_scan_time).total_seconds()
+                        if cache_age < CACHE_MAX_AGE * 2:  # 60분 이내 캐시 허용
+                            LOGGER.warning(f"필터링 실패, 오래된 캐시 사용 ({cache_age:.0f}초 전)")
+                            coin_analyses = cached_result
+                        else:
+                            LOGGER.warning("캐시도 너무 오래됨, 빈 결과 반환")
+                            coin_analyses = {}
+                    else:
+                        coin_analyses = {}
         else:
-            # 스캔 결과가 없으면 새로 스캔
-            coin_analyses = self.scanner.scan_markets(markets_data)
+            # 스캔 결과가 없으면 새로 빠른 필터링
+            LOGGER.info("최초 빠른 필터링 시작")
+            try:
+                coin_analyses = self.scanner.fast_filter_by_indicators(markets_data, top_n=30)
+                # 결과 저장
+                self.scanner.last_scan_result = coin_analyses
+                self.scanner.last_scan_time = datetime.now(UTC)
+            except Exception as e:
+                LOGGER.error(f"빠른 필터링 실패: {e}, 빈 결과 반환")
+                coin_analyses = {}
 
         if not coin_analyses:
-            LOGGER.warning("코인 스캔 결과가 없어 HOLD 결정")
-            return StrategySignal.HOLD, None, 0.0, {}
+            LOGGER.warning("코인 스캔 결과가 없어 HOLD 결정 (빈 분석 결과 반환)")
+            return StrategySignal.HOLD, None, 0.0, {
+                "coin_analyses": {},
+                "decision": {"signal": "HOLD", "reason": "스캔 결과 없음"},
+                "signal": "HOLD",
+                "selected_market": None,
+                "confidence": 0.0,
+                "mode": "local",
+            }
 
         LOGGER.info(f"코인 스캔 완료: {len(coin_analyses)}개 코인 분석됨")
 
         # Step 2: Ollama 2 - 매매 결정
         LOGGER.info("Step 2: 매매 결정 (Ollama 2 - 분석 및 판단)")
-        signal, market, confidence, decision_data = self.decision_maker.make_decision(
-            coin_analyses=coin_analyses,
-            current_portfolio=current_portfolio,
-            market_context=market_context,
-        )
+        try:
+            signal, market, confidence, decision_data = self.decision_maker.make_decision(
+                coin_analyses=coin_analyses,
+                current_portfolio=current_portfolio,
+                market_context=market_context,
+            )
+        except Exception as e:
+            LOGGER.error(f"매매 결정 생성 실패: {e}, HOLD 반환")
+            signal = StrategySignal.HOLD
+            market = None
+            confidence = 0.0
+            decision_data = {
+                "signal": "HOLD",
+                "reason": f"매매 결정 생성 실패: {str(e)[:100]}",
+                "confidence": 0.0,
+            }
 
         # 결과 저장
         self.last_analysis = {

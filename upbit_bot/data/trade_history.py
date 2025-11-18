@@ -474,6 +474,50 @@ class TradeHistoryStore:
             "max_loss": max_loss,
         }
 
+    def clear_statistics(self, today_only: bool = False) -> str:
+        """
+        통계 데이터 초기화.
+        
+        Args:
+            today_only: True면 오늘 거래만 삭제, False면 모든 거래 삭제
+        
+        Returns:
+            초기화 결과 메시지
+        """
+        try:
+            if today_only:
+                # 오늘 거래만 삭제
+                today_filter = "DATE(timestamp) = DATE('now', 'localtime')"
+                
+                # 오늘 거래 삭제
+                self._conn.execute(
+                    f"DELETE FROM trades WHERE {today_filter} AND strategy != 'manual'"
+                )
+                
+                # 오늘 종료된 포지션 삭제
+                self._conn.execute(
+                    f"DELETE FROM positions WHERE DATE(exit_time) = DATE('now', 'localtime') AND strategy != 'manual'"
+                )
+                
+                self._conn.commit()
+                deleted_trades = self._conn.total_changes
+                
+                LOGGER.info(f"오늘 통계 초기화 완료: {deleted_trades}개 거래 삭제")
+                return f"오늘 통계가 초기화되었습니다 ({deleted_trades}개 거래 삭제)"
+            else:
+                # 모든 거래 삭제 (manual 제외)
+                self._conn.execute("DELETE FROM trades WHERE strategy != 'manual'")
+                self._conn.execute("DELETE FROM positions WHERE strategy != 'manual'")
+                self._conn.commit()
+                deleted_trades = self._conn.total_changes
+                
+                LOGGER.info(f"누적 통계 초기화 완료: {deleted_trades}개 거래 삭제")
+                return f"누적 통계가 초기화되었습니다 ({deleted_trades}개 거래 삭제)"
+        except Exception as e:
+            LOGGER.error(f"통계 초기화 실패: {e}")
+            self._conn.rollback()
+            raise
+
     def sync_external_trades(self, client: Any, days: int = 7) -> dict[str, Any]:
         """
         외부 거래 내역 동기화 (사용자가 직접 거래한 내용).

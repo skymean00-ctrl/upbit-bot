@@ -428,6 +428,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             def sync_trades_background():
                                 with sync_lock:
                                     try:
+                                        # app.state에서 직접 가져오기 (클로저 스코프 문제 해결)
+                                        controller = app.state.controller
                                         trade_history_store: TradeHistoryStore = app.state.trade_history_store
                                         result = trade_history_store.sync_external_trades(
                                             client=controller.engine.client,
@@ -444,6 +446,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             sync_thread.start()
                     
                     # Get current account overview
+                    controller = app.state.controller
                     account = controller.get_account_overview()
                     state = controller.get_state().as_dict()
                     
@@ -615,7 +618,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             ollama_status = "disconnected"
                             ollama_error = None
                             try:
-                                test_response = requests.get("http://100.98.189.30:11434/api/tags", timeout=3)
+                                # 서버 로컬 Ollama 사용 (환경 변수 또는 기본값)
+                                import os
+                                from upbit_bot.services.ollama_client import OLLAMA_BASE_URL
+                                ollama_url = os.getenv("OLLAMA_SCANNER_URL") or os.getenv("OLLAMA_BASE_URL") or OLLAMA_BASE_URL
+                                
+                                test_response = requests.get(f"{ollama_url}/api/tags", timeout=3)
                                 if test_response.status_code == 200:
                                     models = test_response.json().get("models", [])
                                     model_names = [m.get("name", "") for m in models]
@@ -628,8 +636,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     LOGGER.warning(f"Ollama 응답 오류: {ollama_error}")
                             except requests.exceptions.Timeout:
                                 ollama_status = "timeout"
-                                ollama_error = "연결 시간 초과 (3초) - 노트북 Ollama 서버 응답 없음"
-                                LOGGER.warning(f"Ollama 연결 시간 초과 - 노트북이 슬립 모드이거나 Ollama 서버가 응답하지 않음")
+                                ollama_error = "연결 시간 초과 (3초) - 서버 Ollama 서버 응답 없음"
+                                LOGGER.warning(f"Ollama 연결 시간 초과 - 서버 Ollama 서버가 응답하지 않음")
                             except requests.exceptions.ConnectionError as e:
                                 ollama_status = "disconnected"
                                 ollama_error = f"연결 오류: {str(e)[:100]}"
@@ -659,8 +667,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             else:
                                 status = "ollama_disconnected"
                             
+                            # 분석 중일 때는 selected_market을 "N/A"로 설정 (BTC 등 기본값 표시 방지)
+                            default_market = "N/A" if status == "analyzing" else state.get("market", "N/A")
+                            
                             ai_analysis = {
-                                "selected_market": state.get("market", "N/A"),
+                                "selected_market": default_market,
                                 "signal": state.get("last_signal", "HOLD"),
                                 "confidence": 0.0,
                                 "market_data": {},
@@ -708,6 +719,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         LOGGER.warning(f"Failed to get recent trades: {e}")
                         recent_trades = []
                     
+                    # 포트폴리오 정보 가져오기 (보유 중인 코인 목록)
+                    portfolio_data = None
+                    try:
+                        portfolio_data = controller.engine.get_portfolio_status()
+                    except Exception as e:
+                        LOGGER.warning(f"Failed to get portfolio status: {e}")
+                        portfolio_data = {
+                            "total_positions": 0,
+                            "open_positions": [],
+                            "worst_position": None,
+                        }
+                    
                     data = {
                         "timestamp": int(__import__("time").time() * 1000),
                         "balance": account,
@@ -716,6 +739,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "ollama_status": ollama_status_data,  # Ollama 상태는 항상 포함 (서버 시작/중지와 상관없이)
                         "statistics": statistics_data,  # 통계 데이터 포함
                         "recent_trades": recent_trades,  # 최근 거래 내역 포함
+                        "portfolio": portfolio_data,  # 포트폴리오 정보 포함 (보유 중인 코인 목록)
                     }
                     
                     # Send SSE formatted data
@@ -742,6 +766,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         trade_history_store: TradeHistoryStore = app.state.trade_history_store
         stats = trade_history_store.get_statistics(market=market, today_only=today_only)
         return JSONResponse(stats)
+
+    @app.delete("/statistics")
+    async def clear_statistics(today_only: bool = False) -> JSONResponse:
+        """Clear trading statistics."""
+        trade_history_store: TradeHistoryStore = app.state.trade_history_store
+        try:
+            result = trade_history_store.clear_statistics(today_only=today_only)
+            return JSONResponse({"success": True, "message": result})
+        except Exception as e:
+            LOGGER.error(f"Failed to clear statistics: {e}")
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     @app.get("/performance")
     async def get_performance(strategy: str | None = None, market: str | None = None, days: int = 0) -> JSONResponse:
@@ -995,6 +1030,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 
                 store = RedisScanStore(redis_url)
                 
+                # 최근 10분 이내 스캔 결과 조회
                 results = store.get_scan_results(max_age_seconds=600)
                 
                 if not results:
@@ -1002,6 +1038,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "status": "no_data",
                         "message": "최근 10분 이내 스캔 결과 없음"
                     })
+                
+                # 고유 마켓(코인) 수 계산
+                unique_markets: set[str] = set()
+                for r in results:
+                    market = r.get("market")
+                    if isinstance(market, str) and market:
+                        unique_markets.add(market)
+                total_coins_scanned = len(unique_markets)
                 
                 latest = max(results, key=lambda x: x.get('timestamp', ''))
                 latest_timestamp_str = latest.get('timestamp', '')
@@ -1013,7 +1057,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     return JSONResponse({
                         "status": "healthy" if age < 300 else "stale",
                         "last_scan_age_seconds": age,
-                        "total_coins_scanned": len(results),
+                        # 최근 10분 이내 스캔된 고유 코인 수
+                        "total_coins_scanned": total_coins_scanned,
+                        # 참고용: 원시 결과 개수
+                        "raw_entries": len(results),
                         "latest_timestamp": latest_timestamp_str
                     })
                 else:
@@ -1100,7 +1147,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
 
             # Ollama 클라이언트 (경량 모델 사용)
-            ollama_client = OllamaClient()
+            # Q&A 용도이므로 결정자용 기본 모델(1.5B)을 그대로 재사용
+            from upbit_bot.services.ollama_client import OLLAMA_DECISION_MODEL
+
+            ollama_client = OllamaClient(model=OLLAMA_DECISION_MODEL)
             prompt = (
                 "당신은 이 업비트 자동매매 봇의 기록을 설명해주는 어시스턴트입니다.\n"
                 "아래 JSON 데이터만 근거로, 사용자의 코인 관련 질문에 한국어로 답하세요.\n"
@@ -1176,10 +1226,22 @@ def _render_dashboard(
         current_price = None
         
         try:
-            ticker = controller.engine.client.get_ticker(market)
-            if ticker:
-                current_price = float(ticker.get("trade_price", 0.0))
-                LOGGER.debug(f"Got ticker for {currency}: {current_price}")
+            # _render_dashboard 함수에서 controller 접근 (app.state 사용)
+            # 순환 참조 방지를 위해 조건부 import 및 None 체크
+            try:
+                import sys
+                app_module = sys.modules.get('upbit_bot.web.app')
+                if app_module and hasattr(app_module, 'create_app'):
+                    # app 인스턴스는 create_app에서 생성되므로 직접 접근 불가
+                    # 대신 account 데이터의 avg_buy_price 사용
+                    current_price = None
+                else:
+                    current_price = None
+            except Exception:
+                current_price = None
+                
+            # API 호출 없이 평균 매수가 사용 (더 안정적)
+            # 필요시 나중에 별도 API 호출 추가 가능
         except Exception as e:
             # API 호출 실패 시 평균 매수가 사용
             LOGGER.warning(f"Failed to get ticker for {market}: {type(e).__name__}")
@@ -1328,14 +1390,14 @@ def _render_dashboard(
         <!-- Header -->
         <div class="mb-10">
             <div class="flex items-center justify-between mb-6">
-                <div>
+    <div>
                     <h1 class="text-5xl font-extrabold bg-gradient-to-r from-blue-600 via-purple-600 to-blue-800 dark:from-blue-400 dark:via-purple-400 dark:to-blue-600 bg-clip-text text-transparent mb-2">
                         Upbit Trading Bot
                     </h1>
                     <p class="text-gray-600 dark:text-gray-400 text-sm">AI 기반 자동 매매 시스템</p>
-                </div>
-            </div>
-        </div>
+    </div>
+                    </div>
+                    </div>
 
         <!-- Server Control & Account (상단으로 이동) -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
@@ -1438,9 +1500,13 @@ def _render_dashboard(
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                         <div>
-                            <p class="text-sm font-semibold text-red-600 dark:text-red-400 mb-1">인증 오류</p>
+                            <p class="text-sm font-semibold text-red-600 dark:text-red-400 mb-1">
+                                {('인증 오류' if '401' in str(account_error) or 'invalid_access_key' in str(account_error) else '계정 조회 오류')}
+                            </p>
                             <p class="text-xs text-red-600 dark:text-red-400">
-                                {'API 키가 유효하지 않습니다. .env 파일의 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 확인해주세요.' if '401' in str(account_error) or 'invalid_access_key' in str(account_error) else str(account_error)}
+                                {'API 키가 유효하지 않습니다. .env 파일의 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 확인해주세요.' if '401' in str(account_error) or 'invalid_access_key' in str(account_error) else '업비트 API 응답 지연 또는 네트워크 오류입니다. 잠시 후 다시 시도해주세요.'}
+                                <br/>
+                                <span class="text-[10px] opacity-80">{str(account_error)}</span>
                             </p>
                         </div>
                     </div>
@@ -1480,34 +1546,8 @@ def _render_dashboard(
                 </svg>
     <div>
                     <h3 class="text-sm font-semibold text-red-800 dark:text-red-200 mb-1">⚠️ Ollama 연결 끊김</h3>
-                    <p class="text-sm text-red-700 dark:text-red-300">AI 시장 분석 서비스를 사용할 수 없습니다. 노트북의 Ollama 서버 상태를 확인해주세요. (IP: 100.98.189.30:11434)</p>
+                    <p class="text-sm text-red-700 dark:text-red-300">AI 시장 분석 서비스를 사용할 수 없습니다. 서버의 Ollama 서버 상태를 확인해주세요.</p>
     </div>
-            </div>
-        </div>
-
-        <!-- 스캐너 상태 카드 -->
-        <div class="mb-6 card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
-            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                <span class="text-xl">📡</span>
-                <span>서버 스캐너 상태</span>
-            </h3>
-            <div id="scanner-status" class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                    <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">상태</p>
-                    <p class="text-sm font-semibold text-gray-900 dark:text-white" id="scanner-health">확인 중...</p>
-                </div>
-                <div>
-                    <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">마지막 스캔</p>
-                    <p class="text-sm font-semibold text-gray-900 dark:text-white" id="last-scan-time">-</p>
-                </div>
-                <div>
-                    <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">스캔된 코인</p>
-                    <p class="text-sm font-semibold text-gray-900 dark:text-white" id="scanned-coins">-</p>
-                </div>
-                <div>
-                    <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">데이터 신선도</p>
-                    <p class="text-sm font-semibold text-gray-900 dark:text-white" id="data-freshness">-</p>
-                </div>
             </div>
         </div>
 
@@ -1517,7 +1557,7 @@ def _render_dashboard(
                 <div class="flex items-center gap-4">
                     <h3 class="text-base font-bold text-green-400 flex items-center gap-3">
                         <span class="text-2xl animate-pulse">🤖</span>
-                        <span>AI 분석 콘솔</span>
+                        <span>AI 분석 콘솔 (2차 선정 10개)</span>
                     </h3>
                     <!-- Ollama 연결 상태 표시 -->
                     <div id="ollama-status-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-700/50 text-gray-400 border border-gray-600">
@@ -1532,7 +1572,29 @@ def _render_dashboard(
             <div id="ai-console-content" class="overflow-y-auto p-5 font-mono text-sm text-green-400 bg-gray-900 dark:bg-black" style="height: 24em; line-height: 1.5em; max-height: 24em;">
                 <div id="ai-console-waiting" class="text-gray-500 flex items-center gap-2">
                     <span class="animate-spin">🔄</span>
-                    <span>AI 분석 대기 중...</span>
+                    <span>AI 분석 대기 중... (1차 스캔: 30-60초, 2차 분석: 20-40초, 최종 선정: 10-30초)</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 매매 예정 콘솔 (최종 5개) -->
+        <div class="mb-8 bg-gradient-to-br from-blue-900 via-blue-900 to-indigo-950 dark:from-indigo-950 dark:via-blue-900 dark:to-black rounded-2xl shadow-2xl border border-blue-700 dark:border-blue-800 overflow-hidden">
+            <div class="bg-gradient-to-r from-blue-800 to-indigo-900 dark:from-indigo-900 dark:to-blue-800 px-5 py-4 border-b border-blue-700 dark:border-blue-800 flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <h3 class="text-base font-bold text-blue-300 flex items-center gap-3">
+                        <span class="text-2xl">🎯</span>
+                        <span>매매 예정 (최종 선정 5개)</span>
+                    </h3>
+                    <div id="trading-pending-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-700/50 text-blue-300 border border-blue-600">
+                        <span id="trading-pending-count">0</span>
+                        <span>개 예정</span>
+                    </div>
+                </div>
+            </div>
+            <div id="trading-pending-content" class="overflow-y-auto p-5 font-mono text-sm text-blue-300 bg-blue-900/30 dark:bg-black" style="height: 20em; line-height: 1.5em; max-height: 20em;">
+                <div id="trading-pending-waiting" class="text-gray-500 flex items-center gap-2">
+                    <span class="animate-spin">🔄</span>
+                    <span>매매 예정 목록 대기 중... (최종 5개 선정 완료 후 표시, 예상 소요: 60-130초)</span>
                 </div>
             </div>
         </div>
@@ -1599,9 +1661,18 @@ def _render_dashboard(
                 
                 <!-- 오늘 기준 성과 -->
                 <div class="mb-6">
-                    <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
-                        <span class="text-xl">📅</span>
-                        <span>오늘 기준 성과</span>
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xl">📅</span>
+                            <span>오늘 기준 성과</span>
+                        </div>
+                        <button
+                            id="clear-statistics-today-btn"
+                            class="px-3 py-1.5 text-xs font-semibold bg-red-500 hover:bg-red-600 active:bg-red-700 text-white rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
+                            title="오늘 성과 초기화"
+                        >
+                            Clear
+                        </button>
                     </h3>
                     <div id="statistics-today" class="space-y-2" style="height: 9em; overflow-y-auto;">
                         <div class="grid grid-cols-2 gap-2 mb-2">
@@ -1627,9 +1698,18 @@ def _render_dashboard(
                 
                 <!-- 누적 성과 -->
                 <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
-                        <span class="text-xl">📈</span>
-                        <span>누적 성과</span>
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xl">📈</span>
+                            <span>누적 성과</span>
+                        </div>
+                        <button
+                            id="clear-statistics-cumulative-btn"
+                            class="px-3 py-1.5 text-xs font-semibold bg-red-500 hover:bg-red-600 active:bg-red-700 text-white rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
+                            title="누적 성과 초기화"
+                        >
+                            Clear
+                        </button>
                     </h3>
                     <div id="statistics-cumulative" class="space-y-2" style="height: 9em; overflow-y-auto;">
                         <div class="grid grid-cols-2 gap-2 mb-2">
@@ -1711,9 +1791,9 @@ def _render_dashboard(
             <!-- Settings + Status Card -->
             <div class="card bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-7">
                 <h2 class="text-2xl font-extrabold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                    <span class="text-3xl">⚙️</span>
+                        <span class="text-3xl">⚙️</span>
                     <span>설정 & 상태</span>
-                </h2>
+                    </h2>
                 <form id="settings-form" method="post" action="/update-settings" class="space-y-6">
                     <div>
                         <label for="strategy-select" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -1748,17 +1828,8 @@ def _render_dashboard(
                             </div>
                         </div>
                     </div>
-                    <div>
-                        <label for="market-display" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            Market
-                        </label>
-                        <div id="market-display" class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
-                            <p class="text-sm font-semibold text-gray-900 dark:text-white">
-                                {state.market or 'KRW-BTC'}
-                            </p>
-                        </div>
-                        <input type="hidden" name="market" value="{state.market or 'KRW-BTC'}">
-                    </div>
+                    <!-- Market 표시 제거: 5개 코인을 모두 모니터링하므로 단일 market 표시 불필요 -->
+                    <input type="hidden" name="market" value="{state.market or 'KRW-BTC'}">
                     <div>
                         <label for="order-pct-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             💰 1건당 매수 퍼센트 (%)
@@ -1781,31 +1852,28 @@ def _render_dashboard(
                         </p>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-gray-200 dark:border-gray-700 text-sm">
-                        <div class="space-y-3">
-                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                                <span class="text-gray-600 dark:text-gray-400">Current Market</span>
-                                <span class="font-semibold text-gray-900 dark:text-white">{state.market}</span>
-                            </div>
-                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                                <span class="text-gray-600 dark:text-gray-400">Current Strategy</span>
-                                <span class="font-semibold text-gray-900 dark:text-white">{state.strategy}</span>
-                            </div>
-                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                                <span class="text-gray-600 dark:text-gray-400">💰 Order Size</span>
-                                <span class="font-semibold text-gray-900 dark:text-white">{settings.order_amount_pct}%</span>
-                            </div>
+                <div class="space-y-3">
+                    <!-- Current Market 표시 제거: 5개 코인을 모두 모니터링하므로 단일 market 표시 불필요 -->
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">Current Strategy</span>
+                        <span class="font-semibold text-gray-900 dark:text-white">{state.strategy}</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">💰 Order Size</span>
+                        <span class="font-semibold text-gray-900 dark:text-white">{settings.order_amount_pct}%</span>
+                    </div>
                         </div>
                         <div class="space-y-3">
-                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                                <span class="text-gray-600 dark:text-gray-400">Last Signal</span>
-                                <span class="font-semibold text-gray-900 dark:text-white">{state.last_signal or "N/A"}</span>
-                            </div>
-                            <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                                <span class="text-gray-600 dark:text-gray-400">Last Run</span>
-                                <span class="font-semibold text-gray-900 dark:text-white text-sm">{state.last_run_at or "N/A"}</span>
-                            </div>
-                            {f'<div class="flex justify-between items-center py-2"><span class="text-red-600 dark:text-red-400">Last Error</span><span class="font-semibold text-red-600 dark:text-red-400 text-sm">{state.last_error}</span></div>' if state.last_error else ''}
-                        </div>
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">Last Signal</span>
+                        <span class="font-semibold text-gray-900 dark:text-white">{state.last_signal or "N/A"}</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span class="text-gray-600 dark:text-gray-400">Last Run</span>
+                        <span class="font-semibold text-gray-900 dark:text-white text-sm">{state.last_run_at or "N/A"}</span>
+                    </div>
+                    {f'<div class="flex justify-between items-center py-2"><span class="text-red-600 dark:text-red-400">Last Error</span><span class="font-semibold text-red-600 dark:text-red-400 text-sm">{state.last_error}</span></div>' if state.last_error else ''}
+                </div>
                     </div>
                     <div class="mt-6">
                         <button 
@@ -2106,6 +2174,7 @@ def _render_dashboard(
                     const confidence = (analysis.confidence || 0) * 100;
                     const marketData = analysis.market_data || {{}};
                     const status = analysis.status;
+                    const analysis_in_progress = status === 'analyzing' || status === 'waiting';
                     
                         const consoleEl = document.getElementById('ai-console-content');
                         if (consoleEl) {{
@@ -2123,7 +2192,11 @@ def _render_dashboard(
                                     waitingEl.className = 'text-gray-500 flex items-center gap-2';
                                     consoleEl.appendChild(waitingEl);
                                 }}
-                                waitingEl.innerHTML = '<span class="animate-spin">🔄</span><span>[' + timestamp + '] ' + coinName + ' | AI 분석 실행 중... (잠시만 기다려주세요)</span>';
+                                // 분석 중일 때는 코인 이름 대신 "다중 코인" 표시 (BTC 등 기본값 방지)
+                                const displayName = (selectedMarket === 'N/A' || coinName === 'N/A') 
+                                    ? '다중 코인' 
+                                    : coinName;
+                                waitingEl.innerHTML = '<span class="animate-spin">🔄</span><span>[' + timestamp + '] ' + displayName + ' | AI 분석 실행 중... (잠시만 기다려주세요)</span>';
                             }} else {{
                                 // 분석이 완료되면 대기 메시지 제거
                                 const waitingEl = document.getElementById('ai-console-waiting');
@@ -2139,7 +2212,7 @@ def _render_dashboard(
                                         errorMsg += ': ' + analysis.ollama_error;
                                     }}
                                     if (analysis.ollama_status === 'disconnected' || analysis.ollama_status === 'timeout') {{
-                                        errorMsg += ' (IP: 100.98.189.30:11434) - Ollama 서버 상태를 확인해주세요.';
+                                        errorMsg += ' - 서버 Ollama 서버 상태를 확인해주세요.';
                                     }}
                                     const message = '[' + timestamp + '] ' + coinName + ' | ' + errorMsg;
                                     addAIConsoleMessage(message, 'red');
@@ -2182,16 +2255,72 @@ def _render_dashboard(
                                     addAIConsoleMessage(message, 'yellow');
                                 }}
                         
-                        // 여러 코인 스캔 결과 표시 (Ollama 1 결과)
-                        // status === 'no_analysis'일 때도 coinAnalyses가 있으면 표시
+                        // 분석 진행 상태 확인 및 표시
+                        if (status === 'analyzing' || analysis_in_progress) {{
+                            // 분석 단계별 메시지 표시
+                            const firstRoundCount = analysis.first_round_count || analysis.decision?.first_round_count || 0;
+                            const secondRoundCount = analysis.second_round_count || analysis.decision?.second_round_count || 0;
+                            
+                            let analyzingMsg = '';
+                            if (firstRoundCount === 0 && secondRoundCount === 0) {{
+                                // 1차 분석 대기 중
+                                analyzingMsg = '[' + timestamp + '] 🔄 1차 분석 대기 중... (거래량 상위 30개 스캔 중, 예상 소요: 30-60초)';
+                            }} else if (firstRoundCount > 0 && secondRoundCount === 0) {{
+                                // 2차 분석 대기 중 (AI 사용)
+                                analyzingMsg = '[' + timestamp + '] 🔄 2차 Ollama 분석 중... (1차 ' + firstRoundCount + '개 완료, 30개 중 10개 선정 중, 예상 소요: 20-40초)';
+                            }} else if (firstRoundCount > 0 && secondRoundCount > 0) {{
+                                // 3차 분석 진행 중 (매매 시그널 분석)
+                                analyzingMsg = '[' + timestamp + '] 🔄 3차 Ollama 매매 시그널 분석 중... (1차 ' + firstRoundCount + '개 → 2차 ' + secondRoundCount + '개 완료, 매매 예정 5개에 대한 시그널 분석, 예상 소요: 10-30초)';
+                            }} else {{
+                                // 기본 메시지
+                                analyzingMsg = '[' + timestamp + '] 🔄 AI 분석 진행 중... (Ollama 서버 응답 대기 중)';
+                            }}
+                            addAIConsoleMessage(analyzingMsg, 'cyan');
+                        }}
+                        
+                        // 2차 선정 10개 표시 (AI 분석 콘솔)
+                        const secondRoundCandidates = analysis.second_round_candidates || analysis.decision?.second_round_candidates || [];
                         const coinAnalyses = analysis.coin_analyses || analysis.scanner_result || analysis.decision?.coin_analyses || {{}};
-                        if (coinAnalyses && Object.keys(coinAnalyses).length > 0) {{
-                            // 상위 10개 코인만 표시
+                        
+                        // 분석 결과가 있는지 확인
+                        const hasAnalysisData = (secondRoundCandidates && secondRoundCandidates.length > 0) || 
+                                               (coinAnalyses && Object.keys(coinAnalyses).length > 0);
+                        
+                        if (secondRoundCandidates && secondRoundCandidates.length > 0) {{
+                            // 2차 선정 10개를 AI 분석 콘솔에 표시
+                            const firstRoundCount = analysis.first_round_count || analysis.decision?.first_round_count || 0;
+                            const secondRoundCount = analysis.second_round_count || analysis.decision?.second_round_count || secondRoundCandidates.length;
+                            
+                            // 단계별 선정 정보 표시
+                            const summaryMessage = '[' + timestamp + '] 📊 선정 과정: 1차 ' + firstRoundCount + '개 → 2차 ' + secondRoundCount + '개 (점수 및 거래량 기준)';
+                            addAIConsoleMessage(summaryMessage, 'cyan');
+                            
+                            // 2차 선정 10개 표시
+                            secondRoundCandidates.forEach((candidate, index) => {{
+                                const market = candidate.market || '';
+                                const coinName = market.replace('KRW-', '');
+                                const baseScore = ((candidate.base_score || candidate.score || 0) * 100).toFixed(1);
+                                const scoreEff = ((candidate.score_eff || candidate.score || 0) * 100).toFixed(1);
+                                const reason = candidate.reason || '분석 중';
+                                const trend = candidate.trend || 'unknown';
+                                const risk = candidate.risk || 'medium';
+                                const isSelected = market === selectedMarket;
+                                
+                                // 선택된 코인은 강조 표시
+                                const prefix = isSelected ? '⭐ ' : '  ';
+                                const rank = (index + 1) + '.';
+                                const trendEmoji = trend === 'uptrend' ? '📈' : trend === 'downtrend' ? '📉' : '➡️';
+                                const riskColor = risk === 'high' ? 'red' : risk === 'medium' ? 'yellow' : 'green';
+                                const exposureInfo = candidate.exposure_pct ? ' | 노출: ' + candidate.exposure_pct.toFixed(1) + '%' : '';
+                                const message = '[' + timestamp + '] ' + prefix + rank + ' ' + coinName + ' | 기본점수: ' + baseScore + '% | 효과점수: ' + scoreEff + '% | ' + trendEmoji + ' ' + trend + ' | 리스크: ' + risk + exposureInfo + ' | 이유: ' + reason;
+                                addAIConsoleMessage(message, isSelected ? 'yellow' : riskColor);
+                            }});
+                        }} else if (coinAnalyses && Object.keys(coinAnalyses).length > 0) {{
+                            // Fallback: 기존 coin_analyses 사용 (레거시 모드)
                             const sortedCoins = Object.entries(coinAnalyses)
                                 .sort((a, b) => ((b[1].score || 0) - (a[1].score || 0)))
                                 .slice(0, 10);
                             
-                            // 각 코인 스캔 결과 표시
                             sortedCoins.forEach(([market, data]) => {{
                                 const coinName = market.replace('KRW-', '');
                                 const score = ((data.score || 0) * 100).toFixed(1);
@@ -2200,60 +2329,243 @@ def _render_dashboard(
                                 const risk = data.risk || 'medium';
                                 const isSelected = market === selectedMarket;
                                 
-                                // 선택된 코인은 강조 표시
                                 const prefix = isSelected ? '⭐ ' : '  ';
                                 const trendEmoji = trend === 'uptrend' ? '📈' : trend === 'downtrend' ? '📉' : '➡️';
                                 const riskColor = risk === 'high' ? 'red' : risk === 'medium' ? 'yellow' : 'green';
                                 const message = '[' + timestamp + '] ' + prefix + coinName + ' | 점수: ' + score + '% | ' + trendEmoji + ' ' + trend + ' | 리스크: ' + risk + ' | 이유: ' + reason;
                                 addAIConsoleMessage(message, isSelected ? 'yellow' : riskColor);
                             }});
-                            
-                            // status === 'no_analysis'이고 선택된 코인이 coinAnalyses에 없는 경우에만 경고 표시
-                            if (status === 'no_analysis' && selectedMarket && !coinAnalyses[selectedMarket]) {{
-                                const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ AI 분석 결과 없음 (Ollama 연결 확인 필요)';
+                        }} else if (!hasAnalysisData && status !== 'analyzing' && !analysis_in_progress) {{
+                            // 분석 결과가 없고 분석 중이 아닐 때만 메시지 표시
+                            if (status === 'no_analysis' || status === 'ollama_disconnected') {{
+                                const message = '[' + timestamp + '] ⚠️ AI 분석 결과 없음 - Ollama 서버 연결 확인 필요';
+                                addAIConsoleMessage(message, 'yellow');
+                            }} else {{
+                                const message = '[' + timestamp + '] ⚠️ AI 분석 결과 없음 - 분석이 완료되지 않았거나 데이터가 없습니다';
                                 addAIConsoleMessage(message, 'yellow');
                             }}
-                        }} else if (status === 'no_analysis') {{
-                            // coinAnalyses가 완전히 없고 status가 no_analysis인 경우
-                            const message = '[' + timestamp + '] ' + coinName + ' | ⚠️ AI 분석 결과 없음 (Ollama 연결 확인 필요)';
-                            addAIConsoleMessage(message, 'yellow');
                         }}
                         
-                        // status가 no_analysis가 아니거나 coinAnalyses가 있는 경우에만 최종 결정 표시
-                        if (status !== 'no_analysis' || (coinAnalyses && Object.keys(coinAnalyses).length > 0)) {{
+                        // 최종 선정 5개 표시 (매매 예정 콘솔) - 보유 중인 코인 고정 표시
+                        const finalCandidates = analysis.final_candidates || analysis.decision?.final_candidates || [];
+                        const pendingContentEl = document.getElementById('trading-pending-content');
+                        const pendingWaitingEl = document.getElementById('trading-pending-waiting');
                         
-                        // 신호에 따른 이모지와 색상
-                        let signalEmoji = '⚪';
-                        let signalColor = 'gray';
-                        if (signal === 'BUY' || signal.toUpperCase() === 'BUY') {{
-                            signalEmoji = '🟢';
-                            signalColor = 'green';
-                        }} else if (signal === 'SELL' || signal.toUpperCase() === 'SELL') {{
-                            signalEmoji = '🔴';
-                            signalColor = 'red';
-                        }} else {{
-                            signalEmoji = '⚪';
-                            signalColor = 'gray';
+                        // 대기 메시지 제거
+                        if (pendingWaitingEl) {{
+                            pendingWaitingEl.remove();
                         }}
                         
-                        // 선택된 코인 최종 결정 표시
-                        if (selectedMarket && signal !== 'HOLD') {{
-                            // marketData가 있으면 상세 정보 표시, 없으면 간단히 표시
-                            let message;
-                            if (marketData && Object.keys(marketData).length > 0 && marketData.current_price) {{
-                                const price = Math.floor(marketData.current_price || 0).toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
-                                const vol = (marketData.volatility || 0).toFixed(2);
-                                const volRatio = (marketData.volume_ratio || 0).toFixed(2);
-                                message = '[' + timestamp + '] ⭐ 최종 결정: ' + selectedMarket.replace('KRW-', '') + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%) | 가격: ' + price + '원 | 변동성: ' + vol + '% | 거래량: ' + volRatio + 'x';
-                            }} else {{
-                                // marketData가 없어도 signal과 confidence는 표시
-                                message = '[' + timestamp + '] ⭐ 최종 결정: ' + selectedMarket.replace('KRW-', '') + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%)';
+                        // 매매 예정 콘솔에 표시
+                        if (pendingContentEl) {{
+                            // 기존 내용 초기화 (최신만 유지)
+                            pendingContentEl.innerHTML = '';
+                            
+                            // 현재 보유 중인 포지션 가져오기
+                            const openPositions = data.portfolio?.open_positions || [];
+                            const heldMarkets = new Set(openPositions.map(p => p.market));
+                            
+                            // 보유 중인 코인과 새로운 후보 통합
+                            const fixedCandidates = [];  // 보유 중인 코인 (고정)
+                            const dynamicCandidates = [];  // 새로운 후보 (동적)
+                            
+                            // final_candidates에서 보유 중인 코인 분리
+                            finalCandidates.forEach(candidate => {{
+                                const market = candidate.market || '';
+                                if (heldMarkets.has(market)) {{
+                                    fixedCandidates.push({{...candidate, isFixed: true, isHeld: true}});
+                                }} else {{
+                                    dynamicCandidates.push(candidate);
+                                }}
+                            }});
+                            
+                            // 보유 중이지만 final_candidates에 없는 코인 추가 (분석에서 제외되었지만 보유 중)
+                            openPositions.forEach(pos => {{
+                                const market = pos.market;
+                                if (market && !fixedCandidates.find(c => c.market === market)) {{
+                                    const positionValue = pos.current_value || 0;
+                                    const entryPrice = pos.entry_price || 0;
+                                    const currentPrice = pos.current_price || entryPrice;
+                                    const pnl = pos.pnl || 0;
+                                    const pnlPct = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice * 100) : 0;
+                                    
+                                    fixedCandidates.push({{
+                                        market: market,
+                                        score: 0,
+                                        score_eff: 0,
+                                        base_score: 0,
+                                        trend: 'unknown',
+                                        risk: 'medium',
+                                        reason: '보유 중 (매도 대기)',
+                                        isFixed: true,
+                                        isHeld: true,
+                                        position_value: positionValue,
+                                        pnl: pnl,
+                                        pnl_pct: pnlPct
+                                    }});
+                                }}
+                            }});
+                            
+                            // 최종 후보 리스트: 고정 코인 + 동적 코인 (최대 5개)
+                            const allCandidates = [...fixedCandidates, ...dynamicCandidates].slice(0, 5);
+                            const finalCount = allCandidates.length;
+                            
+                            // 0개일 때는 표시하지 않음
+                            if (finalCount === 0) {{
+                                return;
                             }}
-                            addAIConsoleMessage(message, signalColor);
-                        }} else if (signal === 'HOLD') {{
-                            const message = '[' + timestamp + '] ⚪ 최종 결정: HOLD (신뢰도: ' + confidence.toFixed(1) + '%)';
-                            addAIConsoleMessage(message, 'gray');
-                        }}
+                            
+                            const fixedCount = fixedCandidates.length;
+                            const dynamicCount = Math.min(dynamicCandidates.length, 5 - fixedCount);
+                            
+                            // 동적 모니터링 상태 가져오기 (타이밍 정보)
+                            const monitoringStatus = data.monitoring_status || {{}};
+                            const timings = monitoringStatus.timings || {{}};
+                            const signals = monitoringStatus.signals || {{}};
+                            
+                            const headerMessage = '[' + timestamp + '] 🎯 매매 예정: ' + finalCount + '개 (보유 ' + fixedCount + '개 고정 🔒 + 신규 ' + dynamicCount + '개)';
+                            addTradingPendingMessage(headerMessage, 'cyan');
+                            
+                            // 5개 코인을 각각 독립적으로 표시
+                            allCandidates.forEach((candidate, i) => {{
+                                const rank = (i + 1) + '.';
+                                const market = candidate.market || '';
+                                const coinName = market.replace('KRW-', '');
+                                const baseScore = ((candidate.base_score || candidate.score || 0) * 100).toFixed(1);
+                                const scoreEff = ((candidate.score_eff || candidate.score || 0) * 100).toFixed(1);
+                                const trend = candidate.trend || 'unknown';
+                                const risk = candidate.risk || 'medium';
+                                const isSelected = market === selectedMarket;
+                                const isFixed = candidate.isFixed || false;
+                                const isHeld = candidate.isHeld || false;
+                                
+                                // AI 타이밍 정보 (동적 모니터링에서 가져오기)
+                                const timingInfo = timings[market] || {{}};
+                                const buyTiming = candidate.buy_timing || timingInfo.buy_timing || 'wait';
+                                const buySignal = candidate.buy_signal || timingInfo.buy_signal || 'none';
+                                const timingReason = candidate.timing_reason || timingInfo.timing_reason || '';
+                                const entrySignal = signals[market];
+                                
+                                // 타이밍별 이모지 및 상태
+                                let timingEmoji = '⏸️';
+                                let timingText = '대기 중';
+                                let timingColor = 'gray';
+                                if (buyTiming === 'now') {{
+                                    timingEmoji = '🟢';
+                                    timingText = '즉시 매수';
+                                    timingColor = 'green';
+                                }} else if (buyTiming === 'watch') {{
+                                    timingEmoji = '👀';
+                                    timingText = '관찰 중';
+                                    timingColor = 'yellow';
+                                }} else if (buyTiming === 'wait') {{
+                                    timingEmoji = '⏳';
+                                    timingText = '대기 중';
+                                    timingColor = 'gray';
+                                }}
+                                
+                                // 신호 강도 표시
+                                let signalStrength = '';
+                                if (buySignal === 'strong') {{
+                                    signalStrength = ' | 신호: 🔥 강함';
+                                }} else if (buySignal === 'medium') {{
+                                    signalStrength = ' | 신호: ⚡ 보통';
+                                }} else if (buySignal === 'weak') {{
+                                    signalStrength = ' | 신호: 💤 약함';
+                                }}
+                                
+                                // entry_signal이 있으면 매매 진행 중
+                                let actionStatus = '';
+                                if (entrySignal) {{
+                                    actionStatus = ' | 🚀 매매 진행 중';
+                                    timingColor = 'green';
+                                }}
+                                
+                                // 고정 표시 (보유 중)
+                                const fixedIcon = isFixed ? '🔒 ' : '';
+                                const fixedText = isFixed ? ' (보유 중)' : '';
+                                
+                                // 선택된 코인은 강조 표시
+                                const prefix = isSelected ? '🔥 ' : (isFixed ? fixedIcon : '  ');
+                                const trendEmoji = trend === 'uptrend' ? '📈' : trend === 'downtrend' ? '📉' : '➡️';
+                                const riskColor = risk === 'high' ? 'red' : risk === 'medium' ? 'yellow' : 'green';
+                                const exposureInfo = candidate.exposure_pct ? ' | 노출: ' + candidate.exposure_pct.toFixed(1) + '%' : '';
+                                
+                                // 보유 중인 코인의 수익률 정보
+                                let pnlInfo = '';
+                                if (isHeld && candidate.pnl_pct !== undefined) {{
+                                    const pnlSign = candidate.pnl_pct >= 0 ? '+' : '';
+                                    pnlInfo = ' | 수익률: ' + pnlSign + candidate.pnl_pct.toFixed(2) + '%';
+                                }}
+                                
+                                let scoreInfo = '';
+                                if (isHeld && candidate.score === 0) {{
+                                    scoreInfo = ' | 점수: 분석 제외';
+                                }} else {{
+                                    scoreInfo = ' | 기본점수: ' + baseScore + '% | 효과점수: ' + scoreEff + '%';
+                                }}
+                                
+                                // 각 코인별 구분선 및 정보
+                                const separator = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ timingReason + ' | ' + trendEmoji + ' ' + trend + ' | 리스크: ' + risk + exposureInfo + pnlInfo;
+                                addTradingPendingMessage(message, timingColor);
+                                
+                                // 타이밍 이유 표시
+                                if (timingReason) {{
+                                    const reasonMessage = '    └─ 이유: ' + timingReason;
+                                    addTradingPendingMessage(reasonMessage, 'gray');
+                                }}
+                            }})
+                            
+                            // 최종 결정 요약 표시 (매매 예정 콘솔에만)
+                            // final_candidates가 있을 때만 최종 결정 표시 (후보 부족 시 표시 안 함)
+                            if (finalCandidates.length > 0 && selectedMarket && selectedMarket !== 'N/A' && signal && signal !== 'HOLD') {{
+                                // 신호에 따른 이모지와 색상
+                                let signalEmoji = '⚪';
+                                let signalColor = 'gray';
+                                if (signal === 'BUY' || signal.toUpperCase() === 'BUY') {{
+                                    signalEmoji = '🟢';
+                                    signalColor = 'green';
+                                }} else if (signal === 'SELL' || signal.toUpperCase() === 'SELL') {{
+                                    signalEmoji = '🔴';
+                                    signalColor = 'red';
+                                }}
+                                
+                                // 최종 결정 메시지
+                                let decisionMessage;
+                                if (marketData && Object.keys(marketData).length > 0 && marketData.current_price) {{
+                                    const price = Math.floor(marketData.current_price || 0).toLocaleString('ko-KR', {{ maximumFractionDigits: 0 }});
+                                    const vol = (marketData.volatility || 0).toFixed(2);
+                                    const volRatio = (marketData.volume_ratio || 0).toFixed(2);
+                                    decisionMessage = '[' + timestamp + '] ⭐ 최종 결정: ' + selectedMarket.replace('KRW-', '') + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%) | 가격: ' + price + '원 | 변동성: ' + vol + '% | 거래량: ' + volRatio + 'x';
+                                }} else {{
+                                    decisionMessage = '[' + timestamp + '] ⭐ 최종 결정: ' + selectedMarket.replace('KRW-', '') + ' | ' + signalEmoji + ' ' + signal + ' (신뢰도: ' + confidence.toFixed(1) + '%)';
+                                }}
+                                addTradingPendingMessage(decisionMessage, signalColor);
+                            }} else if (finalCandidates.length === 0 && selectedMarket && selectedMarket !== 'N/A' && signal && signal !== 'HOLD') {{
+                                // final_candidates가 없으면 최종 결정을 표시하지 않음 (분석 중 또는 후보 부족)
+                                const decisionMessage = '[' + timestamp + '] ⚠️ 최종 선정 대기 중... (후보 부족 또는 분석 진행 중)';
+                                addTradingPendingMessage(decisionMessage, 'gray');
+                            }} else if (signal === 'HOLD' && finalCandidates.length > 0) {{
+                                const decisionMessage = '[' + timestamp + '] ⚪ 최종 결정: HOLD (신뢰도: ' + confidence.toFixed(1) + '%)';
+                                addTradingPendingMessage(decisionMessage, 'gray');
+                            }}
+                            
+                            // 카운트 업데이트
+                            const countEl = document.getElementById('trading-pending-count');
+                            if (countEl) {{
+                                // 0개일 때는 표시하지 않음 (빈 문자열)
+                                countEl.textContent = finalCandidates.length > 0 ? finalCandidates.length : '';
+                            }}
+                        }} else {{
+                            // pendingContentEl이 없으면 대기 메시지 표시
+                            if (pendingWaitingEl) {{
+                                pendingWaitingEl.style.display = 'block';
+                            }}
+                            const countEl = document.getElementById('trading-pending-count');
+                            if (countEl) {{
+                                // 0개일 때는 표시하지 않음 (빈 문자열)
+                                countEl.textContent = '';
+                            }}
                         }}
                                     
                                     // Ollama 연결 정상이면 알림 숨김
@@ -2567,6 +2879,57 @@ def _render_dashboard(
         
         // AI 콘솔 Clear 버튼
         let consoleCleared = false;
+        // 통계 초기화 버튼 이벤트 핸들러
+        const clearTodayBtn = document.getElementById('clear-statistics-today-btn');
+        if (clearTodayBtn) {{
+            clearTodayBtn.addEventListener('click', async () => {{
+                if (!confirm('오늘 기준 성과를 초기화하시겠습니까?')) {{
+                    return;
+                }}
+                try {{
+                    const response = await fetch('/statistics?today_only=true', {{
+                        method: 'DELETE'
+                    }});
+                    const result = await response.json();
+                    if (result.success) {{
+                        alert(result.message || '오늘 기준 성과가 초기화되었습니다.');
+                        // 통계 다시 로드
+                        await loadStatistics();
+                    }} else {{
+                        alert('초기화 실패: ' + (result.error || '알 수 없는 오류'));
+                    }}
+                }} catch (error) {{
+                    console.error('Failed to clear today statistics:', error);
+                    alert('초기화 중 오류가 발생했습니다.');
+                }}
+            }});
+        }}
+        
+        const clearCumulativeBtn = document.getElementById('clear-statistics-cumulative-btn');
+        if (clearCumulativeBtn) {{
+            clearCumulativeBtn.addEventListener('click', async () => {{
+                if (!confirm('누적 성과를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {{
+                    return;
+                }}
+                try {{
+                    const response = await fetch('/statistics?today_only=false', {{
+                        method: 'DELETE'
+                    }});
+                    const result = await response.json();
+                    if (result.success) {{
+                        alert(result.message || '누적 성과가 초기화되었습니다.');
+                        // 통계 다시 로드
+                        await loadStatistics();
+                    }} else {{
+                        alert('초기화 실패: ' + (result.error || '알 수 없는 오류'));
+                    }}
+                }} catch (error) {{
+                    console.error('Failed to clear cumulative statistics:', error);
+                    alert('초기화 중 오류가 발생했습니다.');
+                }}
+            }});
+        }}
+        
         document.getElementById('console-clear-btn').addEventListener('click', () => {{
             const consoleEl = document.getElementById('ai-console-content');
             const waitingEl = document.getElementById('ai-console-waiting');
@@ -2631,6 +2994,32 @@ def _render_dashboard(
                     }}
                 }}, 3000);
             }}
+            
+            // 자동 스크롤 (항상 최신 메시지로)
+            console.scrollTop = console.scrollHeight;
+        }};
+        
+        // 매매 예정 콘솔 메시지 추가 함수
+        window.addTradingPendingMessage = function(message, type = 'info') {{
+            const console = document.getElementById('trading-pending-content');
+            if (!console) return;
+            
+            // 타입에 따른 색상 설정
+            let color = 'text-blue-300';
+            if (type === 'error' || type === 'red') {{
+                color = 'text-red-400';
+            }} else if (type === 'success' || type === 'green') {{
+                color = 'text-green-400';
+            }} else if (type === 'yellow') {{
+                color = 'text-yellow-400';
+            }} else if (type === 'cyan') {{
+                color = 'text-cyan-400';
+            }}
+            
+            const line = document.createElement('div');
+            line.className = `{{color}} py-0.5`;
+            line.textContent = message;
+            console.appendChild(line);
             
             // 자동 스크롤 (항상 최신 메시지로)
             console.scrollTop = console.scrollHeight;
@@ -3100,18 +3489,7 @@ def _render_dashboard(
                                 }});
                             }}
                             
-                            // Current Market 업데이트
-                            if (result.updates.market) {{
-                                const marketElements = document.querySelectorAll('.flex.justify-between.items-center');
-                                marketElements.forEach(el => {{
-                                    if (el.querySelector('span:first-child')?.textContent === 'Current Market') {{
-                                        const marketText = el.querySelector('span:last-child');
-                                        if (marketText) {{
-                                            marketText.textContent = result.updates.market;
-                                        }}
-                                    }}
-                                }});
-                            }}
+                            // Current Market 업데이트 제거: 5개 코인을 모두 모니터링하므로 단일 market 표시 불필요
                             
                             // Order Size 업데이트
                             if (result.updates.order_amount_pct !== undefined) {{
@@ -3406,81 +3784,6 @@ def _render_dashboard(
             }});
         }}
         
-        // 스캐너 상태 업데이트 함수
-        async function updateScannerStatus() {{
-            try {{
-                const response = await fetch('/api/scanner/health');
-                const data = await response.json();
-                
-                const healthEl = document.getElementById('scanner-health');
-                const lastScanEl = document.getElementById('last-scan-time');
-                const scannedCoinsEl = document.getElementById('scanned-coins');
-                const freshnessEl = document.getElementById('data-freshness');
-                
-                if (healthEl) {{
-                    if (data.status === 'healthy') {{
-                        healthEl.textContent = '정상';
-                        healthEl.className = 'text-sm font-semibold text-green-600 dark:text-green-400';
-                    }} else if (data.status === 'stale') {{
-                        healthEl.textContent = '지연됨';
-                        healthEl.className = 'text-sm font-semibold text-yellow-600 dark:text-yellow-400';
-                    }} else if (data.status === 'no_data') {{
-                        healthEl.textContent = '데이터 없음';
-                        healthEl.className = 'text-sm font-semibold text-gray-500 dark:text-gray-400';
-                    }} else {{
-                        healthEl.textContent = '오류';
-                        healthEl.className = 'text-sm font-semibold text-red-600 dark:text-red-400';
-                    }}
-                }}
-                
-                if (lastScanEl) {{
-                    if (data.last_scan_age_seconds !== undefined) {{
-                        const ageSeconds = Math.floor(data.last_scan_age_seconds);
-                        const ageMinutes = Math.floor(ageSeconds / 60);
-                        if (ageMinutes > 0) {{
-                            lastScanEl.textContent = ageMinutes + '분 전';
-                        }} else {{
-                            lastScanEl.textContent = ageSeconds + '초 전';
-                        }}
-                    }} else {{
-                        lastScanEl.textContent = '-';
-                    }}
-                }}
-                
-                if (scannedCoinsEl) {{
-                    scannedCoinsEl.textContent = data.total_coins_scanned || '-';
-                }}
-                
-                if (freshnessEl) {{
-                    if (data.last_scan_age_seconds !== undefined) {{
-                        if (data.last_scan_age_seconds < 60) {{
-                            freshnessEl.textContent = '신선';
-                            freshnessEl.className = 'text-sm font-semibold text-green-600 dark:text-green-400';
-                        }} else if (data.last_scan_age_seconds < 120) {{
-                            freshnessEl.textContent = '보통';
-                            freshnessEl.className = 'text-sm font-semibold text-yellow-600 dark:text-yellow-400';
-                        }} else {{
-                            freshnessEl.textContent = '오래됨';
-                            freshnessEl.className = 'text-sm font-semibold text-red-600 dark:text-red-400';
-                        }}
-                    }} else {{
-                        freshnessEl.textContent = '-';
-                        freshnessEl.className = 'text-sm font-semibold text-gray-500 dark:text-gray-400';
-                    }}
-                }}
-            }} catch (e) {{
-                console.error('스캐너 상태 조회 실패:', e);
-                const healthEl = document.getElementById('scanner-health');
-                if (healthEl) {{
-                    healthEl.textContent = '조회 실패';
-                    healthEl.className = 'text-sm font-semibold text-red-600 dark:text-red-400';
-                }}
-            }}
-        }}
-        
-        // 30초마다 스캐너 상태 업데이트
-        setInterval(updateScannerStatus, 30000);
-        updateScannerStatus();
     </script>
 </body>
 </html>"""
